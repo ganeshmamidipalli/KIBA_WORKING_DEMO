@@ -82,9 +82,15 @@ def run_intake(product_name: str, budget: float, quantity: int, scope_text: str)
         
     except Exception as e:
         logger.error(f"Error in run_intake: {e}")
-        # Return fallback response
+        # Return fallback response with some default questions
         return {
-            "status": "ready",
-            "requirements_summary": f"Basic requirements for {product_name} (${budget} budget, qty: {quantity})",
-            "missing_info_questions": []
+            "status": "questions",
+            "requirements_summary": f"Requirements for {product_name} (${budget:,} budget, qty: {quantity})",
+            "missing_info_questions": [
+                f"What specific tasks will {product_name} be used for?",
+                "What are your performance requirements?",
+                "Do you have any compliance or security requirements?",
+                "What is your preferred delivery timeline?",
+                "Do you need any special features or capabilities?"
+            ]
         }

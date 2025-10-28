@@ -1,4 +1,5 @@
-export const API_BASE = 'http://localhost:8000';
+// Prefer configurable API base via Vite env; fall back to localhost:8000
+export const API_BASE = (import.meta as any).env?.VITE_API_BASE || 'http://localhost:8000';
 
 export interface GenerateRecommendationsRequest {
   project_context: any;
@@ -360,4 +361,3 @@ export async function generateRFQ(selectedVendors: any[], productName: string, q
 
   return response.json();
 }
-

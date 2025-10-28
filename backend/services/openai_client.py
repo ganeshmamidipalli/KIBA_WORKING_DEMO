@@ -5,8 +5,9 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Load environment variables from .env.local file (fallback to .env)
+load_dotenv('.env.local')
+load_dotenv('.env')  # Fallback
 
 def get_client():
     """Get configured OpenAI client."""

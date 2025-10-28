@@ -31,6 +31,8 @@ import { Badge } from "../ui/badge";
 import { Progress } from "../ui/progress";
 import { useState, useEffect } from "react";
 import type { Vendor } from "../../types";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, WidthType } from "docx";
+import { saveAs } from "file-saver";
 
 // Enhanced vendor evaluation types
 interface VendorEvaluation {
@@ -98,6 +100,7 @@ export function StepCARTEnhanced({
   const [pathRecommendation, setPathRecommendation] = useState<'rfq' | 'procurement' | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [showEvidence, setShowEvidence] = useState<string | null>(null);
+  const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
   
   // RFQ form state
   const [rfqData, setRfqData] = useState({
@@ -118,6 +121,7 @@ export function StepCARTEnhanced({
     justification: projectScope,
     type: procurementType,
     serviceProgram: serviceProgram,
+    technicalPOC: technicalPOC,
     projectsSupported: projectKeys.join(', '),
     estimatedCost: parseFloat(budget) || 0,
     competitionType: 'Competitive',
@@ -278,9 +282,212 @@ ${technicalPOC || 'Procurement Team'}`;
     };
   };
 
+  // Generate DOCX document
+  const generateDocx = async (content: Paragraph[], filename: string) => {
+    const doc = new Document({
+      sections: [{
+        children: content
+      }]
+    });
+    
+    const blob = await Packer.toBlob(doc);
+    saveAs(blob, filename);
+  };
+
+  // Generate and download RFQ document as DOCX
+  const generateAndDownloadRFQ = async () => {
+    const rfqEmail = generateRFQEmail();
+    
+    const content: Paragraph[] = [
+      new Paragraph({
+        text: "RFQ Document",
+        heading: HeadingLevel.HEADING_1,
+      }),
+      new Paragraph({
+        text: rfqData.title,
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Generated: ", bold: true }),
+          new TextRun({ text: new Date().toLocaleDateString() }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Quantity: ", bold: true }),
+          new TextRun({ text: rfqData.quantity.toString() }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Need By: ", bold: true }),
+          new TextRun({ text: rfqData.needBy }),
+        ],
+      }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "Email Details",
+        heading: HeadingLevel.HEADING_3,
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "To: ", bold: true }),
+          new TextRun({ text: evaluatedVendors[0]?.vendorName || 'Vendor' }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Subject: ", bold: true }),
+          new TextRun({ text: rfqEmail.subject }),
+        ],
+      }),
+      new Paragraph({ text: "" }),
+      new Paragraph({ text: rfqEmail.body }),
+      new Paragraph({ text: "" }),
+      new Paragraph({ text: "---" }),
+      new Paragraph({
+        text: "Vendor Information",
+        heading: HeadingLevel.HEADING_3,
+      }),
+      ...evaluatedVendors.map(v => 
+        new Paragraph({
+          text: `- ${v.vendorName}: ${v.price ? '$' + v.price.value : 'Price TBD'}`,
+        })
+      ),
+    ];
+    
+    await generateDocx(content, `RFQ_${productName.replace(/\s+/g, '_')}_${Date.now()}.docx`);
+  };
+
+  // Generate and download Procurement document as DOCX
+  const generateAndDownloadProcurement = async () => {
+    const procDoc = generateProcurementDoc();
+    const popEnd = procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : 'TBD';
+    
+    const content: Paragraph[] = [
+      new Paragraph({
+        text: "Procurements & Role Players",
+        heading: HeadingLevel.HEADING_1,
+        alignment: AlignmentType.CENTER,
+      }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "What kind of procurement do you need?*",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: procDoc.type }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "General Information",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Service Program*", bold: true }),
+          new TextRun({ text: "\n" + (procDoc.serviceProgram || 'Applied Research') }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "KMI Technical POC*", bold: true }),
+          new TextRun({ text: "\n" + (technicalPOC || 'To be assigned') }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Estimated Costs*", bold: true }),
+          new TextRun({ text: "\n$" + procDoc.estimatedCost.toLocaleString() }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "POP Start", bold: true }),
+          new TextRun({ text: "\n" + (procData.needBy || 'Required') }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "KMI Project(s) Supported*", bold: true }),
+          new TextRun({ text: "\n" + (procDoc.projectsSupported || 'Use N/A if Not Applicable') }),
+        ],
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "POP Completion Date", bold: true }),
+          new TextRun({ text: "\n" + popEnd }),
+        ],
+      }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "Suggested Procurement Type*",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: "Note - Final Procurement Type Determined by Administration" }),
+      new Paragraph({ text: procDoc.type }),
+      new Paragraph({ text: "" }),
+      // Add procurement type explanation
+      new Paragraph({ text: getProcurementTypeExplanation(procDoc.type) }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "Scope Brief*",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: "Please briefly describe the purpose of the procurement and what the supplier will provide." }),
+      new Paragraph({ text: procDoc.scopeBrief }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "Competition Type*",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: procDoc.competitionType }),
+      new Paragraph({ 
+        text: procDoc.competitionType === 'Competitive' 
+          ? "A Competitive Procurement is a purchasing process in which multiple vendors have been evaluated on criteria such as price, quality, delivery time, and vendor capability."
+          : `This procurement is being handled as a ${procDoc.competitionType} process.`
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({ text: "Multiple Vendors Available?", bold: true }),
+          new TextRun({ text: "\n" + (procDoc.multipleVendorsAvailable ? 'Yes' : 'No') }),
+        ],
+      }),
+      new Paragraph({ text: "" }),
+      new Paragraph({
+        text: "Describe Vendor Evaluation*",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: "Please include vendor name and contact information of all vendors evaluated." }),
+      ...evaluatedVendors.map((v, idx) => 
+        new Paragraph({ 
+          text: `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}` 
+        })
+      ),
+    ];
+    
+    await generateDocx(content, `Procurement_${productName.replace(/\s+/g, '_')}_${Date.now()}.docx`);
+  };
+
+  // Get procurement type explanation
+  const getProcurementTypeExplanation = (type: string): string => {
+    const explanations: Record<string, string> = {
+      'Contract': "Contract: A formal, legally binding agreement between a buyer and a vendor that outlines detailed terms, deliverables, timelines, and responsibilities for complex or high-value goods or services.",
+      'Purchase Order': "Purchase Order: A simplified procurement instrument used to authorize a vendor to provide goods or services.",
+      'Credit Card': "Credit Card: A direct purchasing method using an organizational credit card to quickly acquire goods or services without formal contracts or purchase orders.",
+      'Corporate Account Order': "Corporate Account Order: A procurement made through a vendor with whom Knowmadics has an established account or purchasing relationship (i.e. Verizon Wireless)."
+    };
+    return explanations[type] || `Procurement Type: ${type}`;
+  };
+
   // Handle form submission
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    console.log('handleSubmit called:', { selectedPath, procData });
+    
     if (selectedPath === 'rfq') {
+      await generateAndDownloadRFQ();
+      setDownloadSuccess('RFQ document downloaded successfully!');
+      setTimeout(() => setDownloadSuccess(null), 5000);
+      // Still call onNext for flow continuation
       const rfqEmail = generateRFQEmail();
       onNext({
         type: 'rfq',
@@ -291,6 +498,10 @@ ${technicalPOC || 'Procurement Team'}`;
         }
       });
     } else if (selectedPath === 'procurement') {
+      await generateAndDownloadProcurement();
+      setDownloadSuccess('Procurement document downloaded successfully!');
+      setTimeout(() => setDownloadSuccess(null), 5000);
+      // Still call onNext for flow continuation
       const procDoc = generateProcurementDoc();
       onNext({
         type: 'procurement',
@@ -299,13 +510,26 @@ ${technicalPOC || 'Procurement Team'}`;
           vendors: evaluatedVendors
         }
       });
+    } else {
+      console.error('No path selected!');
     }
   };
 
   // Validation
   const isRFQValid = rfqData.title.trim() && rfqData.quantity > 0 && rfqData.needBy;
   const isProcValid = procData.title.trim() && procData.department.trim() && 
-                     procData.budgetCode.trim() && procData.approver.trim() && procData.needBy;
+                     procData.budgetCode.trim() && procData.approver.trim() && procData.needBy.trim();
+  
+  console.log('Validation:', { 
+    isRFQValid, 
+    isProcValid, 
+    selectedPath, 
+    procDataTitle: procData.title,
+    procDataDept: procData.department,
+    procDataBudget: procData.budgetCode,
+    procDataApprover: procData.approver,
+    procDataNeedBy: procData.needBy
+  });
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/30 p-6">
@@ -324,6 +548,18 @@ ${technicalPOC || 'Procurement Team'}`;
             </Button>
           </div>
         </div>
+
+        {/* Download Success Message */}
+        {downloadSuccess && (
+          <Card className="border-green-500 bg-green-500/10">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-3 text-green-700 dark:text-green-400">
+                <CheckCircle2 className="h-5 w-5" />
+                <span className="font-medium">{downloadSuccess}</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Vendor Evaluation Section */}
         <Card className="border-blue-500/30 bg-blue-500/5">
@@ -625,35 +861,35 @@ ${technicalPOC || 'Procurement Team'}`;
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium">Document Title</label>
+                  <label className="text-sm font-medium">Document Title <span className="text-red-500">*</span></label>
                   <Input
                     value={procData.title}
                     onChange={(e) => setProcData({...procData, title: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Department</label>
+                  <label className="text-sm font-medium">Department <span className="text-red-500">*</span></label>
                   <Input
                     value={procData.department}
                     onChange={(e) => setProcData({...procData, department: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Budget Code</label>
+                  <label className="text-sm font-medium">Budget Code <span className="text-red-500">*</span></label>
                   <Input
                     value={procData.budgetCode}
                     onChange={(e) => setProcData({...procData, budgetCode: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Approver</label>
+                  <label className="text-sm font-medium">Approver <span className="text-red-500">*</span></label>
                   <Input
                     value={procData.approver}
                     onChange={(e) => setProcData({...procData, approver: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Need By</label>
+                  <label className="text-sm font-medium">Need By (POP Start) <span className="text-red-500">*</span></label>
                   <Input
                     type="date"
                     value={procData.needBy}
@@ -661,11 +897,26 @@ ${technicalPOC || 'Procurement Team'}`;
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium">Estimated Cost (USD)</label>
+                  <label className="text-sm font-medium">Estimated Costs <span className="text-red-500">*</span></label>
                   <Input
                     type="number"
                     value={procData.estimatedCost}
                     onChange={(e) => setProcData({...procData, estimatedCost: parseFloat(e.target.value) || 0})}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Service Program <span className="text-red-500">*</span></label>
+                  <Input
+                    value={serviceProgram}
+                    disabled={true}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium">KMI Projects Supported</label>
+                  <Input
+                    value={procData.projectsSupported}
+                    onChange={(e) => setProcData({...procData, projectsSupported: e.target.value})}
+                    placeholder="e.g., KMI-355, BAILIWICK-AISN"
                   />
                 </div>
               </div>
@@ -695,32 +946,37 @@ ${technicalPOC || 'Procurement Team'}`;
 
         {/* Action Buttons */}
         {selectedPath && (
-          <div className="flex items-center justify-between">
-            <Button variant="outline" onClick={onBack}>
-              <ChevronLeft className="h-4 w-4 mr-2" />
-              Back
-            </Button>
-            <Button 
-              onClick={handleSubmit}
-              disabled={
-                (selectedPath === 'rfq' && !isRFQValid) ||
-                (selectedPath === 'procurement' && !isProcValid)
-              }
-              className="gap-2"
-            >
-              {selectedPath === 'rfq' ? (
-                <>
-                  <Send className="h-4 w-4" />
-                  Generate RFQ
-                </>
-              ) : (
-                <>
-                  <FileText className="h-4 w-4" />
-                  Create Procurement Doc
-                </>
-              )}
-            </Button>
-          </div>
+          <Card className="border">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <Button variant="outline" onClick={onBack}>
+                  <ChevronLeft className="h-4 w-4 mr-2" />
+                  Back
+                </Button>
+                
+                <Button 
+                  onClick={handleSubmit}
+                  disabled={
+                    (selectedPath === 'rfq' && !isRFQValid) ||
+                    (selectedPath === 'procurement' && !isProcValid)
+                  }
+                  className="gap-2"
+                >
+                  {selectedPath === 'rfq' ? (
+                    <>
+                      <Send className="h-4 w-4" />
+                      Generate RFQ
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="h-4 w-4" />
+                      Create Procurement Doc
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         )}
       </div>
     </div>

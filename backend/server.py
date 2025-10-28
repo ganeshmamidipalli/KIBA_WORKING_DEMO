@@ -164,7 +164,9 @@ Make it professional but conversational.
         # Fallback to structured summary
         return structured_summary
 
-load_dotenv()
+# Load environment variables - prefer .env.local over .env
+load_dotenv('.env.local')
+load_dotenv('.env')  # Fallback
 
 log_dir = pathlib.Path("logs")
 log_dir.mkdir(exist_ok=True)

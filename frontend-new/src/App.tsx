@@ -15,7 +15,6 @@ import { StepProductDetails } from "./components/steps/StepProductDetails";
 import { StepProjectSummary } from "./components/steps/StepProjectSummary";
 import { StepSpecifications } from "./components/steps/StepSpecifications";
 import { StepVendorSearch } from "./components/steps/StepVendorSearch";
-import { StepRFQ } from "./components/steps/StepRFQ";
 import { StepRFQProcurementSimple } from "./components/steps/StepRFQProcurementSimple";
 import { StepCARTEnhanced } from "./components/steps/StepCARTEnhanced";
 
@@ -459,31 +458,6 @@ export default function App() {
                     serviceProgram={serviceProgram}
                     technicalPOC={technicalPOC}
                     projectKeys={selectedProject ? [selectedProject] : []}
-                  />
-                )}
-
-                {stepManager.currentStep === 8 && (
-                  <StepRFQ
-                    selectedProject={selectedProject}
-                    procurementType={procurementType}
-                    serviceProgram={serviceProgram}
-                    technicalPOC={technicalPOC}
-                    popStart={popStart}
-                    popCompletion={popCompletion}
-                    productName={productName}
-                    category={category}
-                    quantity={quantity}
-                    budget={budget}
-                    projectScope={projectScope}
-                    attachments={attachments}
-                    selectedVariants={selectedVariants}
-                    searchOutputText={searchOutputText}
-                    vendors={vendors}
-                    generatedRFQ={generatedRFQ}
-                    setGeneratedRFQ={setGeneratedRFQ}
-                    generatingRFQ={generatingRFQ}
-                    setGeneratingRFQ={setGeneratingRFQ}
-                    onBack={handleBack}
                   />
                 )}
               </motion.div>

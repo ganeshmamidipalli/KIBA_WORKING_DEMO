@@ -182,29 +182,29 @@ export const STEP_CONFIGS: StepConfig[] = [
     required: true,
     dependencies: [6],
     validation: (state, data) => {
+      console.log('=== STEP 7 (CART) VALIDATION DEBUG ===');
+      console.log('Raw data parameter:', data);
+      console.log('Raw state parameter:', state);
+      console.log('Data selectedVendors:', data?.selectedVendors);
+      console.log('State selectedVendors:', state.selectedVendors);
+      console.log('All state keys:', Object.keys(state));
+      
       // Check both state and data for selectedVendors
       const selectedVendors = data?.selectedVendors || state.selectedVendors;
       
+      console.log('Final selectedVendors:', selectedVendors);
+      console.log('SelectedVendors length:', selectedVendors?.length);
+      
       if (!selectedVendors || selectedVendors.length === 0) {
+        console.log('❌ STEP 7 VALIDATION FAILED: No vendors selected');
         return { isValid: false, error: 'Please select at least one vendor for CART' };
       }
       
+      console.log('✅ STEP 7 VALIDATION PASSED');
       return { isValid: true };
     }
   },
-  {
-    id: 8,
-    key: 'rfqGeneration',
-    label: 'RFQ Generation',
-    title: 'RFQ Generation',
-    component: 'StepRFQ',
-    required: true,
-    dependencies: [7],
-    validation: (state) => {
-      // RFQ step is always valid once reached
-      return { isValid: true };
-    }
-  }
+
 ];
 
 export const STEP_KEYS = {
