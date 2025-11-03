@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Procurement Summary – {{ meta.requestId }}</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Arial, sans-serif; 
+      color: #333; 
+      max-width: 960px; 
+      margin: 0 auto; 
+      padding: 24px; 
+      line-height: 1.6;
+    }
+    h1 { 
+      font-size: 32px; 
+      margin: 0 0 16px;
+      color: #0066cc;
+      font-weight: 600;
+      border-bottom: 3px solid #0066cc;
+      padding-bottom: 12px;
+    }
+    h2 { 
+      font-size: 22px; 
+      margin: 32px 0 16px;
+      color: #0066cc; 
+      font-weight: 600;
+      border-bottom: 2px solid #e0e0e0;
+      padding-bottom: 8px;
+    }
+    h3 {
+      font-size: 18px;
+      margin: 24px 0 12px;
+      color: #555;
+      font-weight: 600;
+    }
+    .meta { 
+      color: #666; 
+      font-size: 13px; 
+      margin-bottom: 24px;
+      padding: 12px;
+      background: #f5f5f5;
+      border-radius: 4px;
+    }
+    .badge { 
+      display: inline-block; 
+      font-size: 11px; 
+      padding: 3px 10px; 
+      border-radius: 12px; 
+      background: #eef2ff; 
+      color: #334; 
+      margin-left: 8px;
+      font-weight: 600;
+    }
+    .warning { 
+      background: #fff4d6; 
+      border-left: 4px solid #f4c10f; 
+      padding: 12px 16px; 
+      margin: 16px 0; 
+      font-size: 13px;
+      border-radius: 4px;
+    }
+    .field-group {
+      margin: 16px 0;
+      padding: 12px;
+      background: #fafafa;
+      border-radius: 4px;
+      border-left: 3px solid #0066cc;
+    }
+    .field-label {
+      font-weight: 600;
+      color: #0066cc;
+      font-size: 14px;
+      display: block;
+      margin-bottom: 6px;
+    }
+    .field-value {
+      color: #333;
+      font-size: 15px;
+      margin-left: 0;
+    }
+    .field-hint {
+      font-size: 12px;
+      color: #888;
+      font-style: italic;
+      margin-top: 4px;
+    }
+    table { 
+      width: 100%; 
+      border-collapse: collapse; 
+      margin: 16px 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    th, td { 
+      text-align: left; 
+      padding: 12px; 
+      border-bottom: 1px solid #e0e0e0; 
+    }
+    th {
+      background: #0066cc;
+      color: white;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background: #f9f9f9;
+    }
+    .section-description {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      border-left: 3px solid #888;
+    }
+    .editable {
+      position: relative;
+      border: 1px solid #ddd;
+      padding: 12px;
+      border-radius: 4px;
+      min-height: 60px;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: #0066cc;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .copy-btn:hover {
+      background: #0052a3;
+    }
+    ul, ol {
+      margin: 12px 0;
+      padding-left: 28px;
+    }
+    li {
+      margin: 8px 0;
+      line-height: 1.8;
+    }
+    .footer {
+      margin-top: 48px;
+      padding-top: 20px;
+      border-top: 2px solid #e0e0e0;
+      font-size: 11px;
+      color: #888;
+      text-align: center;
+    }
+    .info-box {
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 4px;
+    }
+    .info-box strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #1976d2;
+    }
+  </style>
+  {% if isDraft %}<meta name="x-watermark" content="DRAFT" />{% endif %}
+</head>
+<body>
+  <h1>Procurements & Role Players <span class="badge">DRAFT</span></h1>
+  
+  <div class="meta">
+    <strong>Request ID:</strong> {{ meta.requestId }}<br>
+    <strong>Created:</strong> {{ meta.createdAt }}<br>
+    <strong>Environment:</strong> {{ meta.environment }}
+  </div>
+
+  {% if warnings and warnings|length > 0 %}
+  <div class="warning">
+    <strong>⚠️ Warnings:</strong>
+    <ul style="margin-top: 8px;">
+      {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <h2>What kind of procurement do you need?*</h2>
+  <div class="field-group">
+    <span class="field-label">Procurement Type:</span>
+    <span class="field-value">{{ procurement.kind }}</span>
+  </div>
+
+  <h2>General Information</h2>
+  
+  <div class="field-group">
+    <span class="field-label">Service Program*</span>
+    <span class="field-value">{{ procurement.serviceProgram }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">KMI Technical POC*</span>
+    <span class="field-value">{{ procurement.technicalPOC.name }}</span>
+    {% if procurement.technicalPOC.email %}<div class="field-hint">Email: {{ procurement.technicalPOC.email }}</div>{% endif %}
+    {% if procurement.technicalPOC.phone %}<div class="field-hint">Phone: {{ procurement.technicalPOC.phone }}</div>{% endif %}
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Estimated Costs*</span>
+    <span class="field-value">{{ procurement.estimatedCost | formatCurrency }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">POP Start Required</span>
+    <span class="field-value">{{ procurement.popStart or 'N/A' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">KMI Project(s) Supported*</span>
+    <span class="field-value">{{ procurement.projectsSupported | join(', ') }}</span>
+    <div class="field-hint">Use N/A if Not Applicable</div>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">POP Completion Date</span>
+    <span class="field-value">{{ procurement.popEnd or 'N/A' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Suggested Procurement Type*</span>
+    <span class="field-value">{{ procurement.suggestedType or procurement.kind }}</span>
+    <div class="field-hint">Note - Final Procurement Type Determined by Administration</div>
+  </div>
+
+  <h2>Procurement Instrument Definitions</h2>
+  <div class="info-box">
+    <strong>Contract:</strong> A formal, legally binding agreement between a buyer and a vendor that outlines detailed terms, deliverables, timelines, and responsibilities for complex or high-value goods or services.
+    <br><br>
+    <strong>Purchase Order:</strong> A simplified procurement instrument used to authorize a vendor to provide goods or services.
+    <br><br>
+    <strong>Credit Card:</strong> A direct purchasing method using an organizational credit card to quickly acquire goods or services without formal contracts or purchase orders.
+    <br><br>
+    <strong>Corporate Account Order:</strong> A procurement made through a vendor with whom Knowmadics has an established account or purchasing relationship (i.e. Verizon Wireless).
+  </div>
+
+  <h2>Scope Brief*</h2>
+  <div class="section-description">Please briefly describe the purpose of the procurement and what the supplier will provide.</div>
+  <div class="editable">
+    <button class="copy-btn" onclick="copyToClipboard('scope-brief')">Copy</button>
+    <div id="scope-brief" style="white-space: pre-wrap; padding-right: 80px;">{{ procurement.scopeBrief }}</div>
+  </div>
+
+  <h2>Competition Type*</h2>
+  <div class="field-group">
+    <span class="field-label">Competition Type:</span>
+    <span class="field-value">{{ procurement.competitionType }}</span>
+  </div>
+
+  {% if procurement.competitionType == 'Competitive' %}
+  <div class="info-box">
+    <strong>Competitive Procurement:</strong> A Competitive Procurement is a purchasing process in which multiple vendors have been evaluated on criteria such as price, quality, delivery time, and vendor capability.
+  </div>
+  {% endif %}
+
+  <div class="field-group">
+    <span class="field-label">Multiple Vendors Available?</span>
+    <span class="field-value">{{ 'Yes' if procurement.multipleVendorsAvailable else 'No' }}</span>
+  </div>
+
+  <h2>Describe Vendor Evaluation*</h2>
+  <div class="section-description">Please include vendor name and contact information of all vendors evaluated.</div>
+  
+  {% if procurement.vendorEvaluationDescription %}
+  <div class="editable">
+    <button class="copy-btn" onclick="copyToClipboard('vendor-eval-desc')">Copy</button>
+    <div id="vendor-eval-desc" style="white-space: pre-wrap; padding-right: 80px;">{{ procurement.vendorEvaluationDescription }}</div>
+  </div>
+  {% endif %}
+  
+  {% if vendors.evaluated and vendors.evaluated|length > 0 %}
+  <table>
+    <thead>
+      <tr>
+        <th>Vendor Name</th>
+        <th>Contact</th>
+        <th>Email</th>
+        <th>Phone</th>
+        <th>Quote Amount</th>
+        <th>Lead Time</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in vendors.evaluated %}
+      <tr>
+        <td><strong>{{ v.name }}</strong></td>
+        <td>{{ v.contact or '—' }}</td>
+        <td>{{ v.email or '—' }}</td>
+        <td>{{ v.phone or '—' }}</td>
+        <td>{{ v.quoteAmount | formatCurrency }}</td>
+        <td>{% if v.leadTimeDays %}{{ v.leadTimeDays }} days{% else %}—{% endif %}</td>
+        <td>{{ v.notes or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="field-group">
+    <div class="field-value">No vendors evaluated yet.</div>
+  </div>
+  {% endif %}
+
+  <h2>Evaluation Documentation (if any)</h2>
+  {% if attachments and attachments|length > 0 %}
+  <div class="field-group">
+    {% for att in attachments %}
+    <div style="margin: 8px 0; padding: 8px; background: #f0f0f0; border-radius: 4px;">
+      <strong>{{ att.id }}</strong> - {{ att.title }} ({{ att.type }})
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="field-group">
+    <span class="field-value">No attachments</span>
+  </div>
+  {% endif %}
+
+  <h2>Selected Vendor</h2>
+  
+  <div class="field-group">
+    <span class="field-label">Name:</span>
+    <span class="field-value">{{ vendors.selected.name }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Address:</span>
+    <span class="field-value">{{ vendors.selected.address or 'Not provided' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Contact:</span>
+    <span class="field-value">{{ vendors.selected.contact or 'Not provided' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Email:</span>
+    <span class="field-value">{{ vendors.selected.email or 'Not provided' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Phone:</span>
+    <span class="field-value">{{ vendors.selected.phone or 'Not provided' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Tax ID:</span>
+    <span class="field-value">{{ vendors.selected.taxId or 'Not provided' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Payment Terms:</span>
+    <span class="field-value">{{ vendors.selected.paymentTerms or 'Not specified' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Total Award Amount:</span>
+    <span class="field-value">{{ vendors.selected.totalAwardAmount | formatCurrency }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Deliverables Summary:</span>
+    <span class="field-value">{{ vendors.selected.deliverablesSummary or 'Not specified' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Compliance Checks:</span>
+    <span class="field-value">{{ vendors.selected.complianceChecks | join(', ') if vendors.selected.complianceChecks else 'None specified' }}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Selection Rationale:</span>
+    <div class="editable">
+      <button class="copy-btn" onclick="copyToClipboard('rationale')">Copy</button>
+      <div id="rationale" style="white-space: pre-wrap; padding-right: 80px;">{{ vendors.selected.selectionRationale }}</div>
+    </div>
+  </div>
+
+  {% if approvals and approvals|length > 0 %}
+  <h2>Approvals</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Role</th>
+        <th>Name</th>
+        <th>Email</th>
+        <th>Approved At</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in approvals %}
+      <tr>
+        <td>{{ a.role }}</td>
+        <td>{{ a.name }}</td>
+        <td>{{ a.email or '—' }}</td>
+        <td>{{ a.approvedAt or 'Pending' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <hr/>
+  <div class="footer">
+    This document is generated from a versioned schema ({{ docVersion }}). 
+    Finalized copies are immutable and hashed for audit.<br>
+    <strong>Version:</strong> {{ docVersion }} • <strong>Environment:</strong> {{ meta.environment }}
+  </div>
+
+  <script>
+    function copyToClipboard(elementId) {
+      const element = document.getElementById(elementId);
+      const text = element.innerText;
+      
+      navigator.clipboard.writeText(text).then(function() {
+        const btn = event.target;
+        const originalText = btn.innerText;
+        btn.innerText = 'Copied!';
+        btn.style.background = '#28a745';
+        
+        setTimeout(function() {
+          btn.innerText = originalText;
+          btn.style.background = '#0066cc';
+        }, 2000);
+      }).catch(function(err) {
+        alert('Failed to copy text: ' + err);
+      });
+    }
+  </script>
+</body>
+</html>
+

@@ -28,13 +28,10 @@ export class StepManager {
   private steps: StepConfig[];
   private state: StepState;
   private listeners: ((state: StepState) => void)[] = [];
-  private storageKey = 'kiba_step_state_v1';
 
   constructor(steps: StepConfig[]) {
     this.steps = steps;
-    // Attempt to hydrate from session storage first
-    const restored = this.loadState();
-    this.state = restored || {
+    this.state = {
       currentStep: 1,
       completedSteps: [],
       stepData: {},
@@ -55,61 +52,12 @@ export class StepManager {
   private notify() {
     console.log('StepManager: notify() called with', this.listeners.length, 'listeners');
     console.log('StepManager: Current state:', JSON.stringify(this.state, null, 2));
-    // Persist to session storage for browser-scoped persistence until tab close
-    this.saveState();
     this.listeners.forEach(listener => listener(this.state));
   }
 
   // Get current state
   getState(): StepState {
     return { ...this.state };
-  }
-
-  // Persist current state to sessionStorage (clears on tab close)
-  private saveState() {
-    try {
-      if (typeof window !== 'undefined' && window.sessionStorage) {
-        const serialized = JSON.stringify(this.state);
-        window.sessionStorage.setItem(this.storageKey, serialized);
-      }
-    } catch (_) {
-      // ignore storage errors (quota, privacy mode, etc.)
-    }
-  }
-
-  // Load state from sessionStorage
-  private loadState(): StepState | null {
-    try {
-      if (typeof window !== 'undefined' && window.sessionStorage) {
-        const raw = window.sessionStorage.getItem(this.storageKey);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        // Basic shape guard
-        if (
-          typeof parsed === 'object' && parsed &&
-          typeof parsed.currentStep === 'number' &&
-          Array.isArray(parsed.completedSteps) &&
-          typeof parsed.stepData === 'object' && parsed.stepData !== null &&
-          typeof parsed.errors === 'object' && parsed.errors !== null
-        ) {
-          return { ...parsed, loading: false } as StepState;
-        }
-      }
-    } catch (_) {
-      // ignore parse/storage errors
-    }
-    return null;
-  }
-
-  // Clear persisted state (optional helper)
-  clearPersistedState() {
-    try {
-      if (typeof window !== 'undefined' && window.sessionStorage) {
-        window.sessionStorage.removeItem(this.storageKey);
-      }
-    } catch (_) {
-      // ignore
-    }
   }
 
   // Get step configuration

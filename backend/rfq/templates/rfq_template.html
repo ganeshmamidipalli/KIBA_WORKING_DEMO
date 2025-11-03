@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{{ meta.rfq_id }} - Request for Quotation</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 8.5in;
+            margin: 0 auto;
+            padding: 1in;
+            color: #333;
+        }
+        .header {
+            border-bottom: 3px solid #0066cc;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .company-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #0066cc;
+            margin-bottom: 5px;
+        }
+        .rfq-title {
+            font-size: 32px;
+            font-weight: bold;
+            color: #333;
+            margin: 20px 0;
+        }
+        .section {
+            margin: 30px 0;
+            position: relative;
+        }
+        .section-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #0066cc;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 5px;
+        }
+        .field-group {
+            margin: 15px 0;
+            padding: 10px;
+            background: #fafafa;
+            border-radius: 4px;
+            border-left: 3px solid #0066cc;
+        }
+        .field-label {
+            font-weight: 600;
+            color: #555;
+            display: inline-block;
+            width: 200px;
+        }
+        .field-value {
+            color: #333;
+        }
+        .vendor-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        .vendor-table th {
+            background: #0066cc;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+        }
+        .vendor-table td {
+            border: 1px solid #ddd;
+            padding: 10px;
+        }
+        .vendor-table tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+        .alert-box {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .success-box {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        ul {
+            margin: 10px 0;
+            padding-left: 25px;
+        }
+        li {
+            margin: 8px 0;
+        }
+        .footer {
+            margin-top: 50px;
+            padding-top: 20px;
+            border-top: 2px solid #eee;
+            font-size: 12px;
+            color: #666;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .copy-btn:hover {
+            background: #0052a3;
+        }
+        .copy-btn:active {
+            background: #28a745;
+        }
+        .copyable-content {
+            position: relative;
+            padding-right: 100px;
+        }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 16px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .info-box strong {
+            display: block;
+            margin-bottom: 8px;
+            color: #1976d2;
+        }
+    </style>
+    <script>
+        function copySectionToClipboard(elementId) {
+            const element = document.getElementById(elementId);
+            const text = element.innerText;
+            
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function() {
+                    const btn = event.target;
+                    const originalText = btn.innerText;
+                    btn.innerText = 'Copied!';
+                    btn.style.background = '#28a745';
+                    
+                    setTimeout(function() {
+                        btn.innerText = originalText;
+                        btn.style.background = '#0066cc';
+                    }, 2000);
+                }).catch(function(err) {
+                    alert('Failed to copy: ' + err);
+                });
+            } else {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    const btn = event.target;
+                    const originalText = btn.innerText;
+                    btn.innerText = 'Copied!';
+                    btn.style.background = '#28a745';
+                    setTimeout(function() {
+                        btn.innerText = originalText;
+                        btn.style.background = '#0066cc';
+                    }, 2000);
+                } catch (err) {
+                    alert('Failed to copy: ' + err);
+                }
+                document.body.removeChild(textarea);
+            }
+        }
+    </script>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="company-name">{{ meta.company_name }}</div>
+        <div class="rfq-title">Request for Quotation</div>
+        <div style="color: #666; font-size: 14px;">
+            <strong>RFQ ID:</strong> {{ meta.rfq_id }}<br>
+            <strong>Date Issued:</strong> {{ meta.created_at }}<br>
+            <strong>Valid Until:</strong> {{ meta.valid_until }}
+        </div>
+    </div>
+
+    <!-- Procurement Information -->
+    <div class="section">
+        <div class="section-title">Procurement Information
+            <button class="copy-btn" onclick="copySectionToClipboard('procurement-info')">Copy Section</button>
+        </div>
+        <div id="procurement-info" class="copyable-content">
+            <div class="field-group">
+                <span class="field-label">Procurement Instrument:</span>
+                <span class="field-value">{{ procurement.kind }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Service Program:</span>
+                <span class="field-value">{{ procurement.program }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">KMI Technical POC:</span>
+                <span class="field-value">{{ procurement.kmi_technical_poc }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">KMI Project(s) Supported:</span>
+                <span class="field-value">{{ procurement.projects_supported | join(', ') }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Estimated Cost:</span>
+                <span class="field-value">${{ "{:,.2f}".format(procurement.estimated_cost) }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Period of Performance:</span>
+                <span class="field-value">{{ procurement.pop_start }} to {{ procurement.pop_end }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Competition Type:</span>
+                <span class="field-value">{{ procurement.competition_type }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Multiple Vendors Available:</span>
+                <span class="field-value">{{ 'Yes' if procurement.multiple_vendors_available else 'No' }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scope & Requirements -->
+    <div class="section">
+        <div class="section-title">Scope of Work
+            <button class="copy-btn" onclick="copySectionToClipboard('scope-work')">Copy Section</button>
+        </div>
+        <div id="scope-work" class="copyable-content" style="white-space: pre-wrap; background: #f8f9fa; padding: 15px; border-radius: 5px;">{{ scope_brief }}</div>
+    </div>
+
+    <!-- Product Specifications -->
+    {% if product.variant and product.variant.metrics %}
+    <div class="section">
+        <div class="section-title">Product Specifications - {{ product.variant.title }}
+            <button class="copy-btn" onclick="copySectionToClipboard('product-specs')">Copy Section</button>
+        </div>
+        <div id="product-specs" class="copyable-content">
+            <div class="field-group">
+                <span class="field-label">Product:</span>
+                <span class="field-value">{{ product.name }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Quantity:</span>
+                <span class="field-value">{{ product.variant.quantity }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Unit Price Estimate:</span>
+                <span class="field-value">${{ "{:,.2f}".format(product.variant.est_unit_price_usd) }}</span>
+            </div>
+            <div class="field-group">
+                <span class="field-label">Total Estimate:</span>
+                <span class="field-value">${{ "{:,.2f}".format(product.variant.est_total_usd) }}</span>
+            </div>
+            
+            <h4 style="margin-top: 20px; color: #0066cc;">Technical Specifications:</h4>
+            <ul>
+            {% for key, value in product.variant.metrics.items() %}
+                <li><strong>{{ key }}:</strong> {{ value }}</li>
+            {% endfor %}
+            </ul>
+            
+            {% if product.variant.must %}
+            <h4 style="margin-top: 20px; color: #dc3545;">Mandatory Requirements:</h4>
+            <ul>
+            {% for req in product.variant.must %}
+                <li><strong>{{ req.key }}:</strong> {{ req.value }}</li>
+            {% endfor %}
+            </ul>
+            {% endif %}
+            
+            {% if product.variant.should %}
+            <h4 style="margin-top: 20px; color: #ffc107;">Strongly Preferred:</h4>
+            <ul>
+            {% for req in product.variant.should %}
+                <li><strong>{{ req.key }}:</strong> {{ req.value }}</li>
+            {% endfor %}
+            </ul>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Vendor Evaluation -->
+    <div class="section">
+        <div class="section-title">{{ sections.vendor_evaluation_title or 'Vendor Evaluation' }}
+            <button class="copy-btn" onclick="copySectionToClipboard('vendor-eval')">Copy Section</button>
+        </div>
+        <div id="vendor-eval" class="copyable-content">
+        {% if is_competitive %}
+        <div class="success-box">
+            <strong>Competitive Procurement:</strong> {{ selected_vendors | length }} vendors have been evaluated and invited to quote.
+        </div>
+        
+        <table class="vendor-table">
+            <thead>
+                <tr>
+                    <th>Vendor</th>
+                    <th>Location</th>
+                    <th>Contact</th>
+                    <th>Price Estimate</th>
+                    <th>Lead Time</th>
+                    <th>AI Score</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for vendor in selected_vendors %}
+                <tr>
+                    <td><strong>{{ vendor.name }}</strong></td>
+                    <td>{{ vendor.location or '—' }}</td>
+                    <td>{{ vendor.contact or '—' }}</td>
+                    <td>${{ "{:,.2f}".format(vendor.price_estimate) if vendor.price_estimate else '—' }}</td>
+                    <td>{{ vendor.lead_time_days or '—' }} days</td>
+                    <td>{{ "{:.0f}".format((vendor.score or 0) * 100) }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        
+        {% else %}
+        <div class="alert-box">
+            <strong>Single Vendor:</strong> {{ selected_vendors[0].name if selected_vendors else 'No vendor selected' }}
+        </div>
+        
+        {% if selected_vendors %}
+        <div class="field-group">
+            <span class="field-label">Vendor Name:</span>
+            <span class="field-value">{{ selected_vendors[0].name }}</span>
+        </div>
+        <div class="field-group">
+            <span class="field-label">Location:</span>
+            <span class="field-value">{{ selected_vendors[0].location or 'N/A' }}</span>
+        </div>
+        <div class="field-group">
+            <span class="field-label">Contact:</span>
+            <span class="field-value">{{ selected_vendors[0].contact or 'N/A' }}</span>
+        </div>
+        <div class="field-group">
+            <span class="field-label">Price Estimate:</span>
+            <span class="field-value">${{ "{:,.2f}".format(selected_vendors[0].price_estimate) if selected_vendors[0].price_estimate else 'TBD' }}</span>
+        </div>
+        <div class="field-group">
+            <span class="field-label">Lead Time:</span>
+            <span class="field-value">{{ selected_vendors[0].lead_time_days or 'TBD' }} days</span>
+        </div>
+        {% endif %}
+        {% endif %}
+        </div>
+    </div>
+
+    <!-- Standard Definitions (ALWAYS INCLUDED) -->
+    <div class="section">
+        <div class="section-title">{{ sections.instruments_title or 'Procurement Instrument Definitions' }}
+            <button class="copy-btn" onclick="copySectionToClipboard('definitions')">Copy Section</button>
+        </div>
+        <div id="definitions" class="copyable-content">
+        <ul>
+        {% for definition in boilerplate.instruments %}
+            <li>{{ definition }}</li>
+        {% endfor %}
+        </ul>
+        </div>
+    </div>
+
+    <!-- Competitive Statement (ONLY when 2+ vendors) -->
+    {% if is_competitive %}
+    <div class="section">
+        <div class="section-title">{{ sections.competitive_title or 'Competitive Procurement Statement' }}
+            <button class="copy-btn" onclick="copySectionToClipboard('competitive-stmt')">Copy Section</button>
+        </div>
+        <div id="competitive-stmt" class="copyable-content">
+            <p>{{ boilerplate.competitive_def }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Compliance Requirements -->
+    {% if boilerplate.compliance_notes %}
+    <div class="section">
+        <div class="section-title">{{ sections.compliance_title or 'Vendor Compliance Requirements' }}
+            <button class="copy-btn" onclick="copySectionToClipboard('compliance')">Copy Section</button>
+        </div>
+        <div id="compliance" class="copyable-content">
+        <ul>
+        {% for note in boilerplate.compliance_notes %}
+            <li>{{ note }}</li>
+        {% endfor %}
+        </ul>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Footer -->
+    <div class="footer">
+        <p>This RFQ was generated by the Knowmadics AI Procurement Assistant on {{ meta.created_datetime }}.</p>
+        <p>Vendors must respond by {{ meta.valid_until }} with complete pricing, lead times, and compliance certifications.</p>
+    </div>
+</body>
+</html>
+
+

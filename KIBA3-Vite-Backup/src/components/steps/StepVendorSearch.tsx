@@ -94,9 +94,6 @@ export function StepVendorSearch({
   // Track if we've started the first search to prevent re-runs
   const hasSearchedRef = useRef(false);
   
-  // Track the base query to prevent cumulative refinement
-  const baseQueryRef = useRef<string>("");
-  
   // Parse vendors from output text
   const parseVendorsFromOutput = (text: string, modelName: string): VendorItem[] => {
     const results: VendorItem[] = [];
@@ -196,11 +193,6 @@ export function StepVendorSearch({
     // Show thinking on first run only
     const showThinking = firstRunRef.current && batches.length === 0;
     
-    // Store base query on first search (without refinement)
-    if (!withThoughts && baseQueryRef.current === "") {
-      baseQueryRef.current = query;
-    }
-    
     try {
       setSearching(true);
       
@@ -211,10 +203,8 @@ export function StepVendorSearch({
       }
 
       const selectedVariant = selectedVariants[0];
-      // For refine, use base query + new thoughts (not cumulative)
-      const baseQuery = baseQueryRef.current || query;
       const combinedQuery = withThoughts 
-        ? `${baseQuery}. + ${withThoughts}`
+        ? `${query}. + ${withThoughts}`
         : query;
 
       console.log('Starting vendor search with query:', combinedQuery);
@@ -241,19 +231,19 @@ export function StepVendorSearch({
       const vendors = parseVendorsFromOutput(outputText, selectedVariant.title || productName);
       console.log('Parsed vendors:', vendors.length);
 
+      // Create new batch with vendors
+      const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+      const newBatch: Batch = {
+        id: Date.now(),
+        title: `Batch #${batches.length + 1} – Search Results`,
+        query: combinedQuery,
+        items: vendors,
+        createdAt: now,
+        expanded: true
+      };
+
       // Update batches immediately so UI shows results
       setBatches(prev => {
-        // Create new batch with vendors
-        const now = new Date().toLocaleTimeString('en-US', { hour12: false });
-        const newBatch: Batch = {
-          id: Date.now(),
-          title: `Batch #${prev.length + 1} – Search Results`,
-          query: combinedQuery,
-          items: vendors,
-          createdAt: now,
-          expanded: true
-        };
-        
         const updated = prev.map(b => ({ ...b, expanded: false }));
         const newBatches = [newBatch, ...updated];
         console.log('Updated batches, new count:', newBatches.length);
@@ -278,63 +268,36 @@ export function StepVendorSearch({
 
   // Handle vendor selection
   const toggleVendorSelection = (vendorId: string) => {
-    console.log('StepVendorSearch: toggleVendorSelection called with vendorId:', vendorId);
     const newSelected = new Set(selected);
     if (newSelected.has(vendorId)) {
       newSelected.delete(vendorId);
-      console.log('StepVendorSearch: Unselecting vendor, new selection size:', newSelected.size);
     } else {
       if (newSelected.size >= MAX_SELECTIONS) {
         alert(`Maximum ${MAX_SELECTIONS} vendors can be selected.`);
         return;
       }
       newSelected.add(vendorId);
-      console.log('StepVendorSearch: Selecting vendor, new selection size:', newSelected.size);
     }
     setSelected(newSelected);
-    console.log('StepVendorSearch: Updated selected set:', Array.from(newSelected));
   };
 
-  // Auto-run search exactly once on first entry into this step
+  // Auto-run first search ONLY on first visit when no batches exist
+  // This prevents re-running when user navigates back to this step
   useEffect(() => {
-    if (selectedVariants.length === 0) return;
-
-    const sid = typeof window !== 'undefined' ? (localStorage.getItem('kiba3_session_id') || 'no-session') : 'no-session';
-    const autorunKey = `${sid}:vendor_autorun_done`;
-    const alreadyDone = typeof window !== 'undefined' ? localStorage.getItem(autorunKey) === '1' : false;
-
-    if (!alreadyDone && !hasSearchedRef.current && batches.length === 0) {
-      hasSearchedRef.current = true;
-      try {
-        const initialQuery = (searchQuery && searchQuery.trim()) || selectedVariants[0]?.title || productName || 'vendor search';
-        void performSearch(initialQuery);
-      } finally {
-        try { if (typeof window !== 'undefined') localStorage.setItem(autorunKey, '1'); } catch {}
-      }
+    // Skip if we've already searched or if we already have batches
+    if (hasSearchedRef.current || batches.length > 0 || searching || selectedVariants.length === 0) {
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedVariants.length]);
 
-  // Restore batches from searchOutputText when returning to this step
-  useEffect(() => {
-    if (searchOutputText && batches.length === 0) {
-      const vendors = parseVendorsFromOutput(searchOutputText, productName);
-      if (vendors.length > 0) {
-        console.log('Restoring vendors from searchOutputText:', vendors.length);
-        const restoredBatch: Batch = {
-          id: Date.now(),
-          title: 'Batch #1 – Search Results (Restored)',
-          query: searchQuery || 'Initial search',
-          items: vendors,
-          createdAt: new Date().toLocaleTimeString('en-US', { hour12: false }),
-          expanded: true
-        };
-        setBatches([restoredBatch]);
-        setSearchPhase('results');
-      }
+    // Mark that we've started the search
+    hasSearchedRef.current = true;
+    
+    const query = generateSearchQuery();
+    if (query.trim()) {
+      console.log('Auto-running first search...');
+      performSearch(query);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchOutputText, batches.length]); // Only run when searchOutputText or batches state changes
+  }, [selectedVariants]); // Only re-run when selectedVariants changes
 
   // Parse results when output text changes - update UI immediately
   useEffect(() => {
@@ -348,11 +311,11 @@ export function StepVendorSearch({
         ));
       }
     }
-  }, [searchOutputText, batches, searching, productName, searchQuery]);
+  }, [searchOutputText, batches, searching]);
 
   const handleRefineSearch = () => {
     if (!refineInput.trim()) return;
-    const lastQuery = batches[0]?.query || searchQuery || baseQueryRef.current;
+    const lastQuery = batches[0]?.query || searchQuery;
     performSearch(lastQuery, refineInput.trim());
     setRefineInput("");
   };
@@ -599,35 +562,28 @@ export function StepVendorSearch({
           {/* Navigation */}
       <div className="flex justify-between sticky bottom-2 bg-background/95 backdrop-blur border rounded-lg px-4 py-3">
         <Button onClick={handleBack} variant="outline" className="gap-2">
-          <ChevronLeft className="h-4 w-4" />
-          Back
-        </Button>
-        <Button
-          onClick={() => {
+              <ChevronLeft className="h-4 w-4" />
+              Back
+            </Button>
+            <Button
+              onClick={() => {
             // Get selected vendor items
             const allVendors = batches.flatMap(b => b.items);
             const selectedVendors = allVendors.filter(v => selected.has(v.id));
             
-            console.log('StepVendorSearch: Next button clicked');
-            console.log('StepVendorSearch: Batches count:', batches.length);
-            console.log('StepVendorSearch: All vendors:', allVendors.length);
-            console.log('StepVendorSearch: Selected IDs:', Array.from(selected));
-            console.log('StepVendorSearch: Selected vendors:', selectedVendors);
-            console.log('StepVendorSearch: Calling onNext with data:', { selectedVendors });
-            
-            onNext({
-              rawOutput: searchOutputText,
-              generatedQuery: searchQuery,
+                onNext({
+                  rawOutput: searchOutputText,
+                  generatedQuery: searchQuery,
               selectedVendors: selectedVendors,
-            });
-          }}
+                });
+              }}
           disabled={selected.size === 0}
-          className="gap-2"
-        >
+              className="gap-2"
+            >
           Next Step
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
     </motion.div>
   );
 }

@@ -192,6 +192,9 @@ app = FastAPI(title="Knowmadics KIBA3 API")
 # Initialize KPA One-Flow session store
 kpa_session_store = SessionStore(ttl_seconds=60*30)  # 30-minute TTL
 
+# Persistent sessions for KIBA Vendor Search Results Stack (no TTL in dev)
+kiba_session_store = SessionStore(ttl_seconds=None)
+
 # Configure CORS - allow frontend on localhost ports
 # Note: Cannot use allow_origins=["*"] with allow_credentials=True
 cors_origins = [
@@ -1312,6 +1315,114 @@ async def download_rfq(filename: str):
 
 
 # ----------------------------------------------------------------------------
+# PROCUREMENT SUMMARY DOCUMENT ENDPOINTS (Draft + Finalize + Download)
+# ----------------------------------------------------------------------------
+
+# Import Procurement Document service
+from procurement_doc.schema import ProcurementDocumentV1  # pyright: ignore[reportMissingImports]
+from procurement_doc.service import render_draft_html, finalize_and_store  # pyright: ignore[reportMissingImports]
+
+
+@app.post("/api/procurements")
+async def upsert_procurement(req: Request):
+    """Create/Update procurement payload (idempotent by meta.requestId). Stored only on finalize; draft rendering is stateless here."""
+    try:
+        body = await req.json()
+        # Validate minimal shape; deeper validation can be added later
+        meta = (body or {}).get("meta", {})
+        if not meta.get("requestId"):
+            return JSONResponse({"error": "meta.requestId is required"}, status_code=400)
+        # Echo back for now; frontends can hold the working copy
+        return JSONResponse({"ok": True, "payload": body})
+    except Exception as e:
+        logger.error(f"Error upserting procurement: {e}", exc_info=True)
+        return JSONResponse({"error": f"Error: {str(e)}"}, status_code=500)
+
+
+@app.get("/api/procurements/{request_id}")
+async def get_procurement(request_id: str):
+    """Fetch finalized payload if exists; otherwise 404."""
+    try:
+        root = pathlib.Path(__file__).parent / "procurement_doc" / "generated" / "procurements" / request_id
+        if not root.exists():
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        # Choose latest version by directory order (only v1.0.0 for now)
+        versions = sorted([p.name for p in root.iterdir() if p.is_dir()])
+        if not versions:
+            return JSONResponse({"error": "No versions"}, status_code=404)
+        latest = versions[-1]
+        payload_path = root / latest / "payload.json"
+        if not payload_path.exists():
+            return JSONResponse({"error": "No payload"}, status_code=404)
+        return JSONResponse(json.loads(payload_path.read_text("utf-8")))
+    except Exception as e:
+        logger.error(f"Error fetching procurement: {e}", exc_info=True)
+        return JSONResponse({"error": f"Error: {str(e)}"}, status_code=500)
+
+
+@app.post("/api/procurements/{request_id}/draft")
+async def render_procurement_draft(request_id: str, req: Request):
+    """Render HTML draft (returns {html, warnings})."""
+    try:
+        body = await req.json()
+        # Force ids and timestamps
+        now = datetime.now().isoformat()
+        body.setdefault("docVersion", "1.0.0")
+        body.setdefault("meta", {})
+        body["meta"].update({
+            "requestId": request_id,
+            "lastUpdatedAt": now,
+        })
+
+        # Construct schema object and render
+        payload = ProcurementDocumentV1(**body)  # type: ignore[arg-type]
+        html, info = render_draft_html(payload)
+        return JSONResponse({"html": html, **info})
+    except Exception as e:
+        logger.error(f"Error rendering procurement draft: {e}", exc_info=True)
+        return JSONResponse({"error": f"Error: {str(e)}"}, status_code=500)
+
+
+@app.post("/api/procurements/{request_id}/final")
+async def finalize_procurement(request_id: str, req: Request):
+    """Finalize: freeze HTML, stamp version+hash, store, return download links."""
+    try:
+        body = await req.json()
+        now = datetime.now().isoformat()
+        body.setdefault("docVersion", "1.0.0")
+        body.setdefault("meta", {})
+        body["meta"].update({
+            "requestId": request_id,
+            "lastUpdatedAt": now,
+        })
+
+        payload = ProcurementDocumentV1(**body)  # type: ignore[arg-type]
+        result = finalize_and_store(payload)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Error finalizing procurement: {e}", exc_info=True)
+        return JSONResponse({"error": f"Error: {str(e)}"}, status_code=500)
+
+
+@app.get("/api/procurements/{request_id}/download")
+async def download_procurement(request_id: str, format: str = "html", version: str = "1.0.0"):
+    from fastapi.responses import FileResponse
+    try:
+        base = pathlib.Path(__file__).parent / "procurement_doc" / "generated" / "procurements" / request_id / version
+        if format == "html":
+            file_path = base / "final.html"
+            if not file_path.exists():
+                return JSONResponse({"error": "Final document not found"}, status_code=404)
+            return FileResponse(path=str(file_path), filename=f"{request_id}-v{version}.html", media_type="text/html")
+        elif format in ("pdf", "docx"):
+            return JSONResponse({"error": f"{format.upper()} not implemented"}, status_code=501)
+        else:
+            return JSONResponse({"error": "Unsupported format"}, status_code=400)
+    except Exception as e:
+        logger.error(f"Error downloading procurement doc: {e}", exc_info=True)
+        return JSONResponse({"error": f"Error: {str(e)}"}, status_code=500)
+
+# ----------------------------------------------------------------------------
 # KPA ONE-FLOW API ENDPOINTS
 # ----------------------------------------------------------------------------
 
@@ -1667,6 +1778,51 @@ async def generate_final_recommendations(session_id: str):
 # Initialize Post-Cart service
 post_cart_service = PostCartService()
 
+@app.post("/api/post-cart/evaluate-vendors")
+async def evaluate_vendors_endpoint(req: Request):
+    """Evaluate vendor information using LLM to extract complete details and perform bot validation"""
+    try:
+        body = await req.json()
+        from vendor_evaluation_service import (
+            evaluate_vendors_with_llm, 
+            format_vendor_evaluation_description,
+            get_complete_vendor_analysis
+        )
+        from services.openai_client import get_client
+        
+        vendors = body.get("vendors", [])
+        product_name = body.get("product_name", "Product")
+        budget_usd = float(body.get("budget_usd", 0))
+        quantity = int(body.get("quantity", 1))
+        
+        if not vendors:
+            return JSONResponse({"error": "No vendors provided"}, status_code=400)
+        
+        # Evaluate vendors using LLM
+        client = get_client()
+        evaluated = evaluate_vendors_with_llm(vendors, client, product_name, budget_usd, quantity)
+        
+        # Format description for procurement document
+        description = format_vendor_evaluation_description(evaluated)
+        
+        # Get complete analysis including validation and document generation
+        complete_analysis = get_complete_vendor_analysis(evaluated, product_name, quantity, client)
+        
+        return JSONResponse({
+            "evaluated_vendors": evaluated,
+            "evaluation_description": description,
+            "summary": {
+                "total_vendors": len(evaluated),
+                "vendors_in_stock": sum(1 for v in evaluated if v.get('availability', {}).get('in_stock', False)),
+                "avg_lead_time": int(sum(v.get('availability', {}).get('lead_time_days', 30) if isinstance(v.get('availability', {}).get('lead_time_days'), (int, float)) else 30 for v in evaluated) / len(evaluated)) if evaluated else 30
+            },
+            # New bot validation and document generation fields
+            "analysis": complete_analysis
+        })
+    except Exception as e:
+        logger.error(f"Error evaluating vendors: {e}", exc_info=True)
+        return JSONResponse({"error": f"Error evaluating vendors: {str(e)}"}, status_code=500)
+
 @app.post("/api/post-cart/g1-evaluate")
 async def evaluate_g1_endpoint(req: Request):
     """Evaluate G1 decision gate for procurement readiness"""
@@ -1953,6 +2109,136 @@ async def issue_po_endpoint(req: Request):
     except Exception as e:
         logger.error(f"Error issuing PO: {e}", exc_info=True)
         return JSONResponse({"error": f"Error issuing PO: {str(e)}"}, status_code=500)
+
+# ----------------------------------------------------------------------------
+# KIBA SESSIONS (Results Stack + State Persistence)
+# ----------------------------------------------------------------------------
+
+from copy import deepcopy
+
+def _default_kiba_session(session_id: str) -> Dict[str, Any]:
+    now = datetime.now().isoformat()
+    return {
+        "sessionId": session_id,
+        "status": "open",
+        "currentStep": "request",
+        "steps": {
+            "request": {},
+            "vendorSearch": {"runs": [], "activeRunId": None},
+            "evaluation": {"shortlistVendorIds": [], "notesByVendorId": {}, "attachments": []},
+            "selection": {"selectedVendorId": None, "rationale": None, "terms": None, "totalAwardAmount": None},
+        },
+        "audit": [{"at": now, "by": "system", "event": "session_init"}],
+        "version": 1,
+    }
+
+
+@app.get("/api/kiba/sessions/{session_id}")
+async def kiba_get_session(session_id: str):
+    session = kiba_session_store.get(session_id)
+    if not session:
+        session = _default_kiba_session(session_id)
+        kiba_session_store.set(session_id, session)
+    return JSONResponse(session)
+
+
+@app.patch("/api/kiba/sessions/{session_id}")
+async def kiba_patch_session(session_id: str, req: Request):
+    try:
+        body = await req.json()
+        client_version = body.get("version")
+        patch = {k: v for k, v in body.items() if k != "version"}
+
+        session = kiba_session_store.get(session_id)
+        if not session:
+            session = _default_kiba_session(session_id)
+
+        # optimistic concurrency
+        if client_version is not None and client_version != session.get("version"):
+            return JSONResponse({"error": "version_conflict", "serverVersion": session.get("version")}, status_code=409)
+
+        # shallow merge for top-level; nested callers should send full step objects
+        updated = {**session, **patch}
+        updated["version"] = int(session.get("version", 1)) + 1
+        updated.setdefault("audit", []).append({
+            "at": datetime.now().isoformat(),
+            "by": "user",
+            "event": "patch",
+            "payload": list(patch.keys()),
+        })
+
+        kiba_session_store.set(session_id, updated)
+        return JSONResponse(updated)
+    except Exception as e:
+        logger.error(f"kiba_patch_session error: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/kiba/sessions/{session_id}/runs")
+async def kiba_create_run(session_id: str, req: Request):
+    try:
+        body = await req.json()
+        run = body.get("run") or {}
+        if not isinstance(run, dict):
+            return JSONResponse({"error": "invalid_run"}, status_code=400)
+
+        session = kiba_session_store.get(session_id)
+        if not session:
+            session = _default_kiba_session(session_id)
+
+        runs = session["steps"]["vendorSearch"].get("runs") or []
+        runs = runs + [run]
+        session["steps"]["vendorSearch"]["runs"] = runs
+        session["steps"]["vendorSearch"]["activeRunId"] = run.get("runId")
+        session["version"] = int(session.get("version", 1)) + 1
+        session.setdefault("audit", []).append({
+            "at": datetime.now().isoformat(),
+            "by": "user",
+            "event": "run_created",
+            "payload": {"runId": run.get("runId")},
+        })
+
+        kiba_session_store.set(session_id, session)
+        return JSONResponse(session)
+    except Exception as e:
+        logger.error(f"kiba_create_run error: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/kiba/sessions/{session_id}/close")
+async def kiba_close_session(session_id: str):
+    try:
+        session = kiba_session_store.get(session_id)
+        if not session:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+
+        # Basic validations
+        runs = session["steps"]["vendorSearch"].get("runs") or []
+        shortlist = session["steps"]["evaluation"].get("shortlistVendorIds") or []
+        selected = session["steps"]["selection"].get("selectedVendorId")
+        if len(runs) < 1 or len(shortlist) < 1 or not selected:
+            return JSONResponse({"error": "validation_failed"}, status_code=400)
+
+        session = deepcopy(session)
+        session["status"] = "closed"
+        session["final"] = {
+            "activeRunId": session["steps"]["vendorSearch"].get("activeRunId"),
+            "vendorsSnapshot": next((r.get("vendorsSnapshot") for r in runs if r.get("runId") == session["steps"]["vendorSearch"].get("activeRunId")), {}),
+            "selection": session["steps"]["selection"],
+            "steps": session["steps"],
+        }
+        session["version"] = int(session.get("version", 1)) + 1
+        session.setdefault("audit", []).append({
+            "at": datetime.now().isoformat(),
+            "by": "user",
+            "event": "closed",
+        })
+
+        kiba_session_store.set(session_id, session)
+        return JSONResponse(session)
+    except Exception as e:
+        logger.error(f"kiba_close_session error: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 # ----------------------------------------------------------------------------
 # START SERVER

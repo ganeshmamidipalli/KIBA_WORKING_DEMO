@@ -12,6 +12,7 @@ import type { SpecVariant, Attachment, RFQResult, IntakeData, KPARecommendations
 // Step Components (to be created)
 import { StepProjectContext } from "./components/steps/StepProjectContext";
 import { StepProductDetails } from "./components/steps/StepProductDetails";
+import { StepProjectSummary } from "./components/steps/StepProjectSummary";
 import { StepSpecifications } from "./components/steps/StepSpecifications";
 import { StepVendorSearch } from "./components/steps/StepVendorSearch";
 import { StepRFQProcurementSimple } from "./components/steps/StepRFQProcurementSimple";
@@ -109,14 +110,6 @@ export default function App() {
         if (stepData.selectedVendors) {
           console.log("App: Setting selectedVendors:", stepData.selectedVendors);
           setSelectedVendors(stepData.selectedVendors);
-        }
-        if (stepData.kpaRecommendations) {
-          console.log("App: Setting kpaRecommendations:", stepData.kpaRecommendations);
-          setKpaRecommendations(stepData.kpaRecommendations);
-        }
-        if (stepData.selectedVariants) {
-          console.log("App: Setting selectedVariants:", stepData.selectedVariants);
-          setSelectedVariants(stepData.selectedVariants);
         }
       }
       
@@ -374,6 +367,33 @@ export default function App() {
                 )}
 
                 {stepManager.currentStep === 4 && (
+                  <StepProjectSummary
+                    procurementType={procurementType}
+                    serviceProgram={serviceProgram}
+                    technicalPOC={technicalPOC}
+                    selectedProject={selectedProject}
+                    popStart={popStart}
+                    popCompletion={popCompletion}
+                    productName={productName}
+                    category={category}
+                    quantity={quantity}
+                    budget={budget}
+                    projectScope={projectScope}
+                    attachments={attachments}
+                    vendors={vendors}
+                    // KPA One-Flow props
+                    kpaSessionId={kpaSessionId}
+                    setKpaSessionId={setKpaSessionId}
+                    setIntakeData={setIntakeData}
+                    setKpaRecommendations={setKpaRecommendations}
+                    // Callbacks
+                    onEdit={(step) => stepManager.navigateToStep(step)}
+                    onConfirm={handleNext}
+                    onBack={handleBack}
+                  />
+                )}
+
+                {stepManager.currentStep === 5 && (
                   <StepSpecifications
                     productName={productName}
                     quantity={quantity}
@@ -408,7 +428,7 @@ export default function App() {
                   />
                 )}
 
-                {stepManager.currentStep === 5 && (
+                {stepManager.currentStep === 6 && (
                   <StepVendorSearch
                     productName={productName}
                     selectedVariants={selectedVariants}
@@ -424,7 +444,7 @@ export default function App() {
                   />
                 )}
 
-                {stepManager.currentStep === 6 && (
+                {stepManager.currentStep === 7 && (
                   <StepCARTEnhanced
                     selectedVendors={selectedVendors}
                     onNext={handleNext}
@@ -438,7 +458,6 @@ export default function App() {
                     serviceProgram={serviceProgram}
                     technicalPOC={technicalPOC}
                     projectKeys={selectedProject ? [selectedProject] : []}
-                    popStart={popStart}
                   />
                 )}
               </motion.div>

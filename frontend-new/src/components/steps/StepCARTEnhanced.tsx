@@ -29,10 +29,11 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Badge } from "../ui/badge";
 import { Progress } from "../ui/progress";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { Vendor } from "../../types";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, WidthType } from "docx";
 import { saveAs } from "file-saver";
+import { PostCartApiService } from "../../lib/postCartApi";
 
 // Enhanced vendor evaluation types
 interface VendorEvaluation {
@@ -77,6 +78,7 @@ interface StepCARTEnhancedProps {
   serviceProgram?: string;
   technicalPOC?: string;
   projectKeys?: string[];
+  popStart?: string;
 }
 
 export function StepCARTEnhanced({
@@ -92,6 +94,7 @@ export function StepCARTEnhanced({
   serviceProgram = "Applied Research",
   technicalPOC = "",
   projectKeys = [],
+  popStart = "",
 }: StepCARTEnhancedProps) {
   
   // Enhanced state management
@@ -101,6 +104,10 @@ export function StepCARTEnhanced({
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [showEvidence, setShowEvidence] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState<string>('');
+  const [botAnalysis, setBotAnalysis] = useState<any>(null);
+  const hasEvaluatedRef = useRef(false);
   
   // RFQ form state
   const [rfqData, setRfqData] = useState({
@@ -117,7 +124,7 @@ export function StepCARTEnhanced({
     department: 'IT',
     budgetCode: 'CAP-2025-NET',
     approver: '',
-    needBy: '',
+    needBy: popStart, // Initialize with POP Start from Step 1
     justification: projectScope,
     type: procurementType,
     serviceProgram: serviceProgram,
@@ -127,104 +134,174 @@ export function StepCARTEnhanced({
     competitionType: 'Competitive',
     multipleVendorsAvailable: selectedVendors.length > 1,
     scopeBrief: projectScope,
-    vendorEvaluation: [] as Array<{name: string, contact: string, status: string}>
+    vendorEvaluation: [] as Array<{name: string, contact: string, status: string}>,
+    vendorEvaluationDescription: ''
   });
 
-  // Evaluate vendors on component mount
+  // Evaluate vendors on component mount - only once
   useEffect(() => {
-    if (selectedVendors.length > 0) {
+    if (selectedVendors.length > 0 && !hasEvaluatedRef.current) {
       evaluateVendors();
+      hasEvaluatedRef.current = true;
     }
   }, [selectedVendors]);
 
-  // Auto-recommend path based on vendor completeness
+  // Auto-recommend and auto-select path based on vendor completeness and bot analysis
   useEffect(() => {
-    if (evaluatedVendors.length > 0) {
+    if (botAnalysis) {
+      // Use bot analysis status for recommendation
+      if (botAnalysis.status === 'ready') {
+        setPathRecommendation('procurement');
+        setSelectedPath('procurement'); // Auto-select procurement when all vendors ready
+      } else if (botAnalysis.status === 'partial' && botAnalysis.complete_vendors > 0) {
+        setPathRecommendation('procurement'); // Can still proceed with complete vendors
+        setSelectedPath('procurement'); // Auto-select procurement when some vendors ready
+      } else {
+        setPathRecommendation('rfq');
+        // Don't auto-select RFQ, let user choose
+      }
+    } else if (evaluatedVendors.length > 0) {
+      // Fallback to heuristic if bot analysis not available
       const hasIncompleteVendors = evaluatedVendors.some(v => v.completeness.overall !== 'complete');
-      setPathRecommendation(hasIncompleteVendors ? 'rfq' : 'procurement');
+      const recPath = hasIncompleteVendors ? 'rfq' : 'procurement';
+      setPathRecommendation(recPath);
+      if (!hasIncompleteVendors) {
+        setSelectedPath('procurement'); // Auto-select when all complete
+      }
     }
-  }, [evaluatedVendors]);
+  }, [evaluatedVendors, botAnalysis]);
 
-  // Simulate vendor evaluation (replace with actual API call)
+  // Evaluate vendors using LLM-based API
   const evaluateVendors = async () => {
     setIsEvaluating(true);
     
-    // Simulate evaluation delay
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    const evaluations: VendorEvaluation[] = selectedVendors.map((vendor, index) => {
-      // Simulate different completeness scenarios
-      const scenarios = [
-        { hasPrice: true, hasStock: true, hasDelivery: true, hasContact: true }, // Complete
-        { hasPrice: false, hasStock: true, hasDelivery: true, hasContact: true }, // Missing price
-        { hasPrice: true, hasStock: false, hasDelivery: true, hasContact: false }, // Missing stock/contact
-        { hasPrice: true, hasStock: true, hasDelivery: false, hasContact: true }, // Missing delivery
-      ];
+    try {
+      console.log("Evaluating vendors with LLM:", selectedVendors.length);
       
-      const scenario = scenarios[index % scenarios.length];
+      // Call LLM-based vendor evaluation API
+      const result = await PostCartApiService.evaluateVendors(
+        selectedVendors,
+        productName,
+        parseFloat(budget) || 0,
+        parseInt(quantity) || 1
+      );
       
-      const missingFields: Array<"price"|"availability"|"delivery"|"contact"> = [];
-      if (!scenario.hasPrice) missingFields.push('price');
-      if (!scenario.hasStock) missingFields.push('availability');
-      if (!scenario.hasDelivery) missingFields.push('delivery');
-      if (!scenario.hasContact) missingFields.push('contact');
+      console.log("Evaluation result:", result);
       
-      const overall = missingFields.length === 0 ? 'complete' : 
-                     missingFields.length <= 2 ? 'partial' : 'missing';
+      // Transform LLM results to VendorEvaluation format
+      const evaluations: VendorEvaluation[] = result.evaluated_vendors.map((vendor: any, index: number) => {
+        const pricing = vendor.pricing || {};
+        const availability = vendor.availability || {};
+        const delivery = vendor.delivery || {};
+        const contact = vendor.contact || {};
+        const business = vendor.business_info || {};
+        
+        // Determine missing fields
+        const missingFields: Array<"price"|"availability"|"delivery"|"contact"> = [];
+        if (!pricing.unit_price) missingFields.push('price');
+        if (!availability.lead_time_days && !availability.in_stock) missingFields.push('availability');
+        if (!delivery.ships_to_wichita) missingFields.push('delivery');
+        if (!contact.sales_email && !contact.sales_phone) missingFields.push('contact');
+        
+        const overall = missingFields.length === 0 ? 'complete' : 
+                       missingFields.length <= 2 ? 'partial' : 'missing';
+        
+        // Calculate score based on completeness
+        const baseScore = 50;
+        const priceScore = pricing.unit_price ? 15 : 0;
+        const availabilityScore = (availability.lead_time_days || availability.in_stock) ? 15 : 0;
+        const deliveryScore = delivery.ships_to_wichita ? 10 : 0;
+        const contactScore = (contact.sales_email || contact.sales_phone) ? 10 : 0;
+        const score = baseScore + priceScore + availabilityScore + deliveryScore + contactScore;
+        
+        return {
+          vendorName: vendor.vendor_name || `Vendor ${index + 1}`,
+          productTitle: vendor.product_model || productName,
+          price: pricing.unit_price ? {
+            value: pricing.unit_price,
+            currency: pricing.currency || 'USD',
+            sourceText: pricing.notes || 'Extracted from vendor page'
+          } : undefined,
+          availability: availability.lead_time_days || availability.in_stock !== undefined ? {
+            inStock: availability.in_stock || false,
+            leadTimeDays: availability.lead_time_days,
+            sourceText: availability.notes || 'Extracted from vendor page'
+          } : undefined,
+          delivery: delivery.ships_to_wichita ? {
+            toLocation: 'Wichita, KS',
+            promiseDays: delivery.delivery_days,
+            terms: delivery.shipping_method || delivery.terms,
+            sourceText: delivery.shipping_method || 'Extracted from vendor page'
+          } : undefined,
+          warranty: business.warranty || 'Unknown',
+          link: contact.contact_url || selectedVendors[index]?.purchase_url || '#',
+          domain: new URL(contact.contact_url || selectedVendors[index]?.purchase_url || 'https://vendor.com').hostname.replace('www.', ''),
+          contact: (contact.sales_email || contact.sales_phone) ? {
+            email: contact.sales_email,
+            phone: contact.sales_phone,
+            formUrl: contact.contact_url
+          } : undefined,
+          evidence: [
+            { 
+              label: 'Price', 
+              snippet: pricing.unit_price 
+                ? `$${typeof pricing.unit_price === 'number' ? pricing.unit_price.toFixed(2) : pricing.unit_price}` 
+                : 'Not found' 
+            },
+            { 
+              label: 'Stock', 
+              snippet: availability.in_stock 
+                ? 'In stock' 
+                : availability.notes || availability.lead_time_days 
+                  ? `${availability.lead_time_days} days` 
+                  : 'Unknown' 
+            },
+            { label: 'Delivery', snippet: delivery.ships_to_wichita ? `Ships to Wichita in ${delivery.delivery_days || 'N/A'} days` : 'Not confirmed' },
+            { label: 'Contact', snippet: contact.sales_email || contact.sales_phone || 'Missing' }
+          ],
+          lastCheckedAt: new Date().toISOString(),
+          score,
+          completeness: {
+            hasPrice: !!pricing.unit_price,
+            hasStockOrLead: !!(availability.lead_time_days || availability.in_stock !== undefined),
+            hasDeliveryToTarget: !!delivery.ships_to_wichita,
+            hasVendorIdentity: true,
+            overall,
+            missingFields
+          },
+          flags: {
+            isOfficialOEM: vendor.quality_indicators?.is_oem || false,
+            isDistributor: vendor.quality_indicators?.is_distributor || false,
+            isMarketplace: false,
+            possibleMismatch: false
+          }
+        };
+      });
       
-      return {
-        vendorName: vendor.vendor_name || vendor.name || `Vendor ${index + 1}`,
-        productTitle: vendor.product_name || productName,
-        price: scenario.hasPrice ? {
-          value: vendor.price || Math.floor(Math.random() * 5000) + 1000,
-          currency: 'USD',
-          sourceText: 'Found on product page'
-        } : undefined,
-        availability: scenario.hasStock ? {
-          inStock: Math.random() > 0.3,
-          leadTimeDays: Math.floor(Math.random() * 30) + 1,
-          sourceText: 'Stock status confirmed'
-        } : undefined,
-        delivery: scenario.hasDelivery ? {
-          toLocation: 'Wichita, KS',
-          promiseDays: Math.floor(Math.random() * 30) + 1,
-          terms: 'Standard shipping',
-          sourceText: 'Delivery promise verified'
-        } : undefined,
-        warranty: '1 year manufacturer warranty',
-        link: vendor.purchase_url || vendor.website || '#',
-        domain: vendor.vendor_name?.toLowerCase().replace(/\s+/g, '') + '.com' || 'vendor.com',
-        contact: scenario.hasContact ? {
-          email: `sales@${vendor.vendor_name?.toLowerCase().replace(/\s+/g, '')}.com`,
-          phone: '(555) 123-4567'
-        } : undefined,
-        evidence: [
-          { label: 'Price', snippet: scenario.hasPrice ? `$${vendor.price || '1,200'}` : 'Not found' },
-          { label: 'Stock', snippet: scenario.hasStock ? 'In stock' : 'Lead time unknown' },
-          { label: 'Delivery', snippet: scenario.hasDelivery ? 'Ships to Wichita' : 'Delivery not confirmed' },
-          { label: 'Contact', snippet: scenario.hasContact ? 'sales@vendor.com' : 'Contact info missing' }
-        ],
-        lastCheckedAt: new Date().toISOString(),
-        score: Math.floor(Math.random() * 40) + 60, // 60-100
-        completeness: {
-          hasPrice: scenario.hasPrice,
-          hasStockOrLead: scenario.hasStock,
-          hasDeliveryToTarget: scenario.hasDelivery,
-          hasVendorIdentity: true,
-          overall,
-          missingFields
-        },
-        flags: {
-          isOfficialOEM: Math.random() > 0.7,
-          isDistributor: Math.random() > 0.5,
-          isMarketplace: Math.random() > 0.8,
-          possibleMismatch: Math.random() > 0.9
-        }
-      };
-    });
-    
-    setEvaluatedVendors(evaluations);
-    setIsEvaluating(false);
+      setEvaluatedVendors(evaluations);
+      
+      // Store evaluation description for procurement doc
+      if (result.evaluation_description) {
+        setProcData(prev => ({
+          ...prev,
+          vendorEvaluationDescription: result.evaluation_description
+        }));
+      }
+      
+      // Store bot analysis if available
+      if (result.analysis) {
+        setBotAnalysis(result.analysis);
+        console.log("Bot analysis:", result.analysis);
+      }
+      
+      console.log("Vendor evaluation complete:", evaluations.length);
+      
+    } catch (error) {
+      console.error('Error evaluating vendors:', error);
+      alert('Failed to evaluate vendors. Please try again.');
+    } finally {
+      setIsEvaluating(false);
+    }
   };
 
   // Generate RFQ email template
@@ -280,6 +357,255 @@ ${technicalPOC || 'Procurement Team'}`;
         status: v.completeness.overall === 'complete' ? 'Quote available' : 'Quote requested'
       }))
     };
+  };
+
+  // Generate HTML preview of procurement document
+  const generateProcurementPreview = (): string => {
+    const procDoc = generateProcurementDoc();
+    const popEnd = procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : 'TBD';
+    const vendorEvalDesc = procData.vendorEvaluationDescription || evaluatedVendors.map((v, idx) => 
+      `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}`
+    ).join('\n\n');
+    const techPOC = procData.technicalPOC || technicalPOC;
+    
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Procurement Document Preview</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Arial, sans-serif; 
+      color: #333; 
+      max-width: 960px; 
+      margin: 0 auto; 
+      padding: 24px; 
+      line-height: 1.6;
+    }
+    h1 { 
+      font-size: 32px; 
+      margin: 0 0 16px;
+      color: #0066cc;
+      font-weight: 600;
+      border-bottom: 3px solid #0066cc;
+      padding-bottom: 12px;
+      text-align: center;
+    }
+    h2 { 
+      font-size: 22px; 
+      margin: 32px 0 16px;
+      color: #0066cc; 
+      font-weight: 600;
+      border-bottom: 2px solid #e0e0e0;
+      padding-bottom: 8px;
+    }
+    .field-group {
+      margin: 16px 0;
+      padding: 12px;
+      background: #fafafa;
+      border-radius: 4px;
+      border-left: 3px solid #0066cc;
+    }
+    .field-label {
+      font-weight: 600;
+      color: #0066cc;
+      font-size: 14px;
+      display: block;
+      margin-bottom: 6px;
+    }
+    .field-value {
+      color: #333;
+      font-size: 15px;
+      margin-left: 0;
+    }
+    .field-hint {
+      font-size: 12px;
+      color: #888;
+      font-style: italic;
+      margin-top: 4px;
+    }
+    .section-description {
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      border-left: 3px solid #888;
+    }
+    .info-box {
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      padding: 16px;
+      margin: 20px 0;
+      border-radius: 4px;
+    }
+    .info-box strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #1976d2;
+    }
+    ul, ol {
+      margin: 12px 0;
+      padding-left: 28px;
+    }
+    li {
+      margin: 8px 0;
+      line-height: 1.8;
+    }
+    .editable {
+      position: relative;
+      border: 1px solid #ddd;
+      padding: 12px;
+      border-radius: 4px;
+      min-height: 60px;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: #0066cc;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .copy-btn:hover {
+      background: #0052a3;
+    }
+  </style>
+</head>
+<body>
+  <h1>Procurements & Role Players</h1>
+  
+  <h2>What kind of procurement do you need?*</h2>
+  <div class="field-group">
+    <span class="field-value">Contract, Subcontract, Purchase Order, Credit Card Auth</span>
+  </div>
+  <div class="field-group">
+    <span class="field-label">Selected:</span>
+    <span class="field-value">${procDoc.type}</span>
+  </div>
+
+  <h2>General Information</h2>
+  
+  <div class="field-group">
+    <span class="field-label">Service Program*</span>
+    <span class="field-value">${procDoc.serviceProgram}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">KMI Technical POC*</span>
+    <span class="field-value">${techPOC || 'To be assigned'}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">Estimated Costs*</span>
+    <span class="field-value">$${procDoc.estimatedCost.toLocaleString()}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">POP Start Required</span>
+    <span class="field-value">${procData.needBy || 'N/A'}</span>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">KMI Project(s) Supported*</span>
+    <span class="field-value">${procDoc.projectsSupported}</span>
+    <div class="field-hint">Use N/A if Not Applicable</div>
+  </div>
+
+  <div class="field-group">
+    <span class="field-label">POP Completion Date</span>
+    <span class="field-value">${popEnd}</span>
+  </div>
+
+  <h2>Suggested Procurement Type*</h2>
+  <div class="field-group">
+    <span class="field-label">Suggested Procurement Type:</span>
+    <span class="field-value">${procDoc.type}</span>
+    <div class="field-hint">Note - Final Procurement Type Determined by Administration</div>
+  </div>
+
+  <h2>Procurement Instrument Definitions</h2>
+  <div class="info-box">
+    <strong>Contract:</strong> A formal, legally binding agreement between a buyer and a vendor that outlines detailed terms, deliverables, timelines, and responsibilities for complex or high-value goods or services.
+    <br><br>
+    <strong>Purchase Order:</strong> A simplified procurement instrument used to authorize a vendor to provide goods or services.
+    <br><br>
+    <strong>Credit Card:</strong> A direct purchasing method using an organizational credit card to quickly acquire goods or services without formal contracts or purchase orders.
+    <br><br>
+    <strong>Corporate Account Order:</strong> A procurement made through a vendor with whom Knowmadics has an established account or purchasing relationship (i.e. Verizon Wireless).
+  </div>
+
+  <h2>Scope Brief*</h2>
+  <div class="section-description">Please briefly describe the purpose of the procurement and what the supplier will provide.</div>
+  <div class="editable">
+    <button class="copy-btn" onclick="copyToClipboard('scope-brief')">Copy</button>
+    <div id="scope-brief" style="white-space: pre-wrap; padding-right: 80px;">${procDoc.scopeBrief}</div>
+  </div>
+
+  <h2>Competition Type*</h2>
+  <div class="field-group">
+    <span class="field-label">Competition Type:</span>
+    <span class="field-value">${procDoc.competitionType}</span>
+  </div>
+
+  ${procDoc.competitionType === 'Competitive' ? `
+  <div class="info-box">
+    <strong>Competitive Procurement:</strong> A Competitive Procurement is a purchasing process in which multiple vendors have been evaluated on criteria such as price, quality, delivery time, and vendor capability.
+  </div>
+  ` : ''}
+
+  <div class="field-group">
+    <span class="field-label">Multiple Vendors Available?</span>
+    <span class="field-value">${procDoc.multipleVendorsAvailable ? 'Yes' : 'No'}</span>
+  </div>
+
+  <h2>Describe Vendor Evaluation*</h2>
+  <div class="section-description">Please include vendor name and contact information of all vendors evaluated.</div>
+  <div class="editable">
+    <button class="copy-btn" onclick="copyToClipboard('vendor-eval-desc')">Copy</button>
+    <div id="vendor-eval-desc" style="white-space: pre-wrap; padding-right: 80px;">${vendorEvalDesc}</div>
+  </div>
+
+  <h2>Evaluation Documentation (if any)</h2>
+  <div class="field-group">
+    <span class="field-value">No attachments</span>
+  </div>
+
+  <script>
+    function copyToClipboard(elementId) {
+      const element = document.getElementById(elementId);
+      const text = element.innerText;
+      
+      navigator.clipboard.writeText(text).then(function() {
+        const btn = event.target;
+        const originalText = btn.innerText;
+        btn.innerText = 'Copied!';
+        btn.style.background = '#28a745';
+        
+        setTimeout(function() {
+          btn.innerText = originalText;
+          btn.style.background = '#0066cc';
+        }, 2000);
+      }).catch(function(err) {
+        alert('Failed to copy text: ' + err);
+      });
+    }
+  </script>
+</body>
+</html>`;
+  };
+
+  // Show preview modal
+  const handlePreview = () => {
+    const html = generateProcurementPreview();
+    setPreviewHtml(html);
+    setShowPreview(true);
   };
 
   // Generate DOCX document
@@ -426,8 +752,14 @@ ${technicalPOC || 'Procurement Team'}`;
       new Paragraph({ text: "Note - Final Procurement Type Determined by Administration" }),
       new Paragraph({ text: procDoc.type }),
       new Paragraph({ text: "" }),
-      // Add procurement type explanation
-      new Paragraph({ text: getProcurementTypeExplanation(procDoc.type) }),
+      new Paragraph({
+        text: "Procurement Instrument Definitions",
+        heading: HeadingLevel.HEADING_2,
+      }),
+      new Paragraph({ text: "Contract: A formal, legally binding agreement between a buyer and a vendor that outlines detailed terms, deliverables, timelines, and responsibilities for complex or high-value goods or services." }),
+      new Paragraph({ text: "Purchase Order: A simplified procurement instrument used to authorize a vendor to provide goods or services." }),
+      new Paragraph({ text: "Credit Card: A direct purchasing method using an organizational credit card to quickly acquire goods or services without formal contracts or purchase orders." }),
+      new Paragraph({ text: "Corporate Account Order: A procurement made through a vendor with whom Knowmadics has an established account or purchasing relationship (i.e. Verizon Wireless)." }),
       new Paragraph({ text: "" }),
       new Paragraph({
         text: "Scope Brief*",
@@ -458,11 +790,9 @@ ${technicalPOC || 'Procurement Team'}`;
         heading: HeadingLevel.HEADING_2,
       }),
       new Paragraph({ text: "Please include vendor name and contact information of all vendors evaluated." }),
-      ...evaluatedVendors.map((v, idx) => 
-        new Paragraph({ 
-          text: `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}` 
-        })
-      ),
+      ...(procData.vendorEvaluationDescription || evaluatedVendors.map((v, idx) => 
+        `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}`
+      )).split('\n\n').map(text => new Paragraph({ text }))
     ];
     
     await generateDocx(content, `Procurement_${productName.replace(/\s+/g, '_')}_${Date.now()}.docx`);
@@ -479,7 +809,36 @@ ${technicalPOC || 'Procurement Team'}`;
     return explanations[type] || `Procurement Type: ${type}`;
   };
 
-  // Handle form submission
+  // Bot validation for missing critical information
+  const getProcurementReadiness = () => {
+    // Use bot analysis if available (more accurate)
+    if (botAnalysis) {
+      // Check if we have any complete vendors ready to proceed
+      const isReady = botAnalysis.status === 'ready' || (botAnalysis.complete_vendors > 0 && botAnalysis.status === 'partial');
+      return {
+        missingPrices: botAnalysis.incomplete_vendors || 0,
+        missingContacts: 0, // Bot analysis doesn't track this separately
+        incompleteVendors: botAnalysis.incomplete_vendors || 0,
+        isReady: isReady,
+        warnings: []
+      };
+    }
+    
+    // Fallback to heuristic if bot analysis not available
+    const missingPrices = evaluatedVendors.filter(v => !v.price).length;
+    const missingContacts = evaluatedVendors.filter(v => !v.contact || (!v.contact.email && !v.contact.phone)).length;
+    const incompleteVendors = evaluatedVendors.filter(v => v.completeness.overall !== 'complete').length;
+    
+    return {
+      missingPrices,
+      missingContacts,
+      incompleteVendors,
+      isReady: missingPrices === 0 && missingContacts === 0,
+      warnings: []
+    };
+  };
+
+  // Handle form submission with bot validation
   const handleSubmit = async () => {
     console.log('handleSubmit called:', { selectedPath, procData });
     
@@ -491,6 +850,7 @@ ${technicalPOC || 'Procurement Team'}`;
       const rfqEmail = generateRFQEmail();
       onNext({
         type: 'rfq',
+        selectedVendors: selectedVendors, // Include selectedVendors for validation
         data: {
           ...rfqData,
           email: rfqEmail,
@@ -498,6 +858,33 @@ ${technicalPOC || 'Procurement Team'}`;
         }
       });
     } else if (selectedPath === 'procurement') {
+      // Bot validation before allowing procurement
+      const readiness = getProcurementReadiness();
+      
+      if (!readiness.isReady) {
+        const issues = [];
+        if (readiness.missingPrices > 0) {
+          issues.push(`❌ ${readiness.missingPrices} vendor(s) missing price information`);
+        }
+        if (readiness.missingContacts > 0) {
+          issues.push(`❌ ${readiness.missingContacts} vendor(s) missing contact information`);
+        }
+        
+        const message = `⚠️ Procurement Blocked: Missing Critical Information\n\n${issues.join('\n')}\n\n⚠️ You must generate RFQs first to obtain complete vendor information before submitting for procurement approval.`;
+        alert(message);
+        return;
+      }
+      
+      // Show preview first before downloading
+      handlePreview();
+    } else {
+      console.error('No path selected!');
+    }
+  };
+
+  // Separate function for confirmed download
+  const handleConfirmedDownload = async () => {
+    if (selectedPath === 'procurement') {
       await generateAndDownloadProcurement();
       setDownloadSuccess('Procurement document downloaded successfully!');
       setTimeout(() => setDownloadSuccess(null), 5000);
@@ -505,30 +892,27 @@ ${technicalPOC || 'Procurement Team'}`;
       const procDoc = generateProcurementDoc();
       onNext({
         type: 'procurement',
+        selectedVendors: selectedVendors, // Include selectedVendors for validation
         data: {
           ...procDoc,
           vendors: evaluatedVendors
         }
       });
-    } else {
-      console.error('No path selected!');
     }
   };
 
   // Validation
   const isRFQValid = rfqData.title.trim() && rfqData.quantity > 0 && rfqData.needBy;
-  const isProcValid = procData.title.trim() && procData.department.trim() && 
-                     procData.budgetCode.trim() && procData.approver.trim() && procData.needBy.trim();
+  const readiness = getProcurementReadiness();
+  const isProcValid = procData.needBy.trim() && procData.estimatedCost > 0 && readiness.isReady;
   
   console.log('Validation:', { 
     isRFQValid, 
     isProcValid, 
     selectedPath, 
-    procDataTitle: procData.title,
-    procDataDept: procData.department,
-    procDataBudget: procData.budgetCode,
-    procDataApprover: procData.approver,
-    procDataNeedBy: procData.needBy
+    procDataNeedBy: procData.needBy,
+    procDataEstimatedCost: procData.estimatedCost,
+    readinessReady: readiness.isReady
   });
 
   return (
@@ -580,6 +964,71 @@ ${technicalPOC || 'Procurement Team'}`;
               </div>
             ) : (
               <div className="space-y-4">
+                {/* Bot Analysis & Recommendations */}
+                {botAnalysis && (
+                  <div className={`rounded-lg border-2 p-4 ${
+                    botAnalysis.status === 'ready' ? 'border-green-500 bg-green-50' : 
+                    botAnalysis.status === 'partial' ? 'border-orange-500 bg-orange-50' : 
+                    'border-yellow-500 bg-yellow-50'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      {botAnalysis.status === 'ready' ? (
+                        <>
+                          <CheckCircle2 className="h-5 w-5 text-green-600" />
+                          <h3 className="font-bold text-green-800">Ready for Procurement</h3>
+                        </>
+                      ) : botAnalysis.status === 'partial' ? (
+                        <>
+                          <AlertTriangle className="h-5 w-5 text-orange-600" />
+                          <h3 className="font-bold text-orange-800">Partially Ready</h3>
+                        </>
+                      ) : (
+                        <>
+                          <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                          <h3 className="font-bold text-yellow-800">RFQ Required</h3>
+                        </>
+                      )}
+                    </div>
+                    
+                    <div className="space-y-3">
+                      <div className="bg-white rounded p-3">
+                        <p className="text-sm font-semibold mb-1">Bot Analysis:</p>
+                        <p className="text-sm">{botAnalysis.recommendation}</p>
+                      </div>
+                      
+                      {botAnalysis.complete_vendors !== undefined && (
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <CheckCircle2 className="h-4 w-4 text-green-600" />
+                          <span>{botAnalysis.complete_vendors} complete vendor(s) ready</span>
+                          {botAnalysis.incomplete_vendors > 0 && (
+                            <>
+                              <AlertTriangle className="h-4 w-4 text-orange-600" />
+                              <span>{botAnalysis.incomplete_vendors} incomplete vendor(s)</span>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      
+                      {botAnalysis.documents && botAnalysis.documents.rfq_draft && (
+                        <div className="bg-white rounded-lg border p-3">
+                          <p className="text-sm font-semibold mb-2">Auto-Generated RFQ Draft:</p>
+                          <pre className="text-xs bg-gray-50 p-2 rounded whitespace-pre-wrap overflow-x-auto">
+                            {botAnalysis.documents.rfq_draft}
+                          </pre>
+                        </div>
+                      )}
+                      
+                      {botAnalysis.bot_check && botAnalysis.bot_check.block_next_step && (
+                        <div className="bg-red-100 border border-red-300 rounded p-3">
+                          <p className="text-sm font-semibold text-red-800">
+                            ⚠️ Cannot proceed: {botAnalysis.bot_check.block_reason}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
                 {evaluatedVendors.map((vendor, index) => (
                   <Card key={index} className="border shadow-sm">
                     <CardContent className="p-4">
@@ -859,69 +1308,80 @@ ${technicalPOC || 'Procurement Team'}`;
               <CardDescription>Fill in the details for your procurement approval</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-sm font-medium">Document Title <span className="text-red-500">*</span></label>
-                  <Input
-                    value={procData.title}
-                    onChange={(e) => setProcData({...procData, title: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Department <span className="text-red-500">*</span></label>
-                  <Input
-                    value={procData.department}
-                    onChange={(e) => setProcData({...procData, department: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Budget Code <span className="text-red-500">*</span></label>
-                  <Input
-                    value={procData.budgetCode}
-                    onChange={(e) => setProcData({...procData, budgetCode: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Approver <span className="text-red-500">*</span></label>
-                  <Input
-                    value={procData.approver}
-                    onChange={(e) => setProcData({...procData, approver: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Need By (POP Start) <span className="text-red-500">*</span></label>
-                  <Input
-                    type="date"
-                    value={procData.needBy}
-                    onChange={(e) => setProcData({...procData, needBy: e.target.value})}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Estimated Costs <span className="text-red-500">*</span></label>
-                  <Input
-                    type="number"
-                    value={procData.estimatedCost}
-                    onChange={(e) => setProcData({...procData, estimatedCost: parseFloat(e.target.value) || 0})}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">Service Program <span className="text-red-500">*</span></label>
-                  <Input
-                    value={serviceProgram}
-                    disabled={true}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium">KMI Projects Supported</label>
-                  <Input
-                    value={procData.projectsSupported}
-                    onChange={(e) => setProcData({...procData, projectsSupported: e.target.value})}
-                    placeholder="e.g., KMI-355, BAILIWICK-AISN"
-                  />
+              {/* What kind of procurement do you need? */}
+              <div className="border-b pb-4 mb-4">
+                <h3 className="text-lg font-semibold mb-2">What kind of procurement do you need?*</h3>
+                <p className="text-sm text-muted-foreground mb-2">Contract, Subcontract, Purchase Order, Credit Card Auth</p>
+                <p className="text-sm font-medium">Selected: {procData.type}</p>
+              </div>
+
+              {/* General Information */}
+              <div className="border-b pb-4 mb-4">
+                <h3 className="text-lg font-semibold mb-3">General Information</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-sm font-medium">Service Program <span className="text-red-500">*</span></label>
+                    <Input value={serviceProgram} disabled={true} />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">KMI Technical POC <span className="text-red-500">*</span></label>
+                    <Input value={procData.technicalPOC || technicalPOC || 'To be assigned'} disabled={true} />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Estimated Costs <span className="text-red-500">*</span></label>
+                    <Input
+                      type="number"
+                      value={procData.estimatedCost}
+                      onChange={(e) => setProcData({...procData, estimatedCost: parseFloat(e.target.value) || 0})}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Need By (POP Start) <span className="text-red-500">*</span></label>
+                    <Input
+                      type="date"
+                      value={procData.needBy}
+                      onChange={(e) => setProcData({...procData, needBy: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">KMI Project(s) Supported <span className="text-red-500">*</span></label>
+                    <Input
+                      value={procData.projectsSupported}
+                      onChange={(e) => setProcData({...procData, projectsSupported: e.target.value})}
+                      placeholder="e.g., KMI-355, BAILIWICK-AISN"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">POP Completion Date</label>
+                    <Input
+                      type="date"
+                      value={procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : ''}
+                      disabled={true}
+                    />
+                  </div>
                 </div>
               </div>
-              
-              <div>
+
+              {/* Suggested Procurement Type */}
+              <div className="border-b pb-4 mb-4">
+                <h3 className="text-lg font-semibold mb-2">Suggested Procurement Type*</h3>
+                <p className="text-xs text-muted-foreground mb-2">Note - Final Procurement Type Determined by Administration</p>
+                <p className="text-sm font-medium">{procData.type}</p>
+              </div>
+
+              {/* Procurement Instrument Definitions */}
+              <div className="border-b pb-4 mb-4">
+                <h3 className="text-lg font-semibold mb-2">Procurement Instrument Definitions</h3>
+                <div className="bg-muted p-3 rounded text-sm space-y-2">
+                  <p><strong>Contract:</strong> A formal, legally binding agreement between a buyer and a vendor that outlines detailed terms, deliverables, timelines, and responsibilities for complex or high-value goods or services.</p>
+                  <p><strong>Purchase Order:</strong> A simplified procurement instrument used to authorize a vendor to provide goods or services.</p>
+                  <p><strong>Credit Card:</strong> A direct purchasing method using an organizational credit card to quickly acquire goods or services without formal contracts or purchase orders.</p>
+                  <p><strong>Corporate Account Order:</strong> A procurement made through a vendor with whom Knowmadics has an established account or purchasing relationship (i.e. Verizon Wireless).</p>
+                </div>
+              </div>
+
+              {/* Justification */}
+              <div className="border-b pb-4 mb-4">
                 <label className="text-sm font-medium">Justification</label>
                 <Textarea
                   value={procData.justification}
@@ -930,14 +1390,46 @@ ${technicalPOC || 'Procurement Team'}`;
                   rows={3}
                 />
               </div>
-              
-              <div>
-                <label className="text-sm font-medium">Scope Brief</label>
+
+              {/* Scope Brief */}
+              <div className="border-b pb-4 mb-4">
+                <label className="text-sm font-medium">Scope Brief <span className="text-red-500">*</span></label>
+                <p className="text-xs text-muted-foreground mb-2">Please briefly describe the purpose of the procurement and what the supplier will provide.</p>
                 <Textarea
                   value={procData.scopeBrief}
                   onChange={(e) => setProcData({...procData, scopeBrief: e.target.value})}
                   placeholder="Describe the scope and deliverables..."
-                  rows={3}
+                  rows={4}
+                />
+              </div>
+
+              {/* Competition Type */}
+              <div className="border-b pb-4 mb-4">
+                <h3 className="text-lg font-semibold mb-2">Competition Type*</h3>
+                <div className="mb-2">
+                  <label className="text-sm font-medium">Competition Type:</label>
+                  <p className="text-sm font-medium">{procData.competitionType}</p>
+                </div>
+                {procData.competitionType === 'Competitive' && (
+                  <div className="bg-muted p-3 rounded text-sm">
+                    <strong>Competitive Procurement:</strong> A Competitive Procurement is a purchasing process in which multiple vendors have been evaluated on criteria such as price, quality, delivery time, and vendor capability.
+                  </div>
+                )}
+                <div className="mt-2">
+                  <label className="text-sm font-medium">Multiple Vendors Available?</label>
+                  <p className="text-sm font-medium">{procData.multipleVendorsAvailable ? 'Yes' : 'No'}</p>
+                </div>
+              </div>
+
+              {/* Vendor Evaluation */}
+              <div className="pb-4 mb-4">
+                <h3 className="text-lg font-semibold mb-2">Describe Vendor Evaluation*</h3>
+                <p className="text-xs text-muted-foreground mb-2">Please include vendor name and contact information of all vendors evaluated.</p>
+                <Textarea
+                  value={procData.vendorEvaluationDescription}
+                  onChange={(e) => setProcData({...procData, vendorEvaluationDescription: e.target.value})}
+                  placeholder="Describe vendor evaluation details..."
+                  rows={4}
                 />
               </div>
             </CardContent>
@@ -954,31 +1446,95 @@ ${technicalPOC || 'Procurement Team'}`;
                   Back
                 </Button>
                 
-                <Button 
-                  onClick={handleSubmit}
-                  disabled={
-                    (selectedPath === 'rfq' && !isRFQValid) ||
-                    (selectedPath === 'procurement' && !isProcValid)
-                  }
-                  className="gap-2"
-                >
-                  {selectedPath === 'rfq' ? (
-                    <>
-                      <Send className="h-4 w-4" />
-                      Generate RFQ
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="h-4 w-4" />
-                      Create Procurement Doc
-                    </>
+                <div className="flex gap-2">
+                  {selectedPath === 'procurement' && (
+                    <Button 
+                      variant="outline"
+                      onClick={handlePreview}
+                      disabled={!isProcValid}
+                      className="gap-2"
+                    >
+                      <Eye className="h-4 w-4" />
+                      Preview
+                    </Button>
                   )}
-                </Button>
+                  <Button 
+                    onClick={handleSubmit}
+                    disabled={
+                      (selectedPath === 'rfq' && !isRFQValid) ||
+                      (selectedPath === 'procurement' && !isProcValid)
+                    }
+                    className="gap-2"
+                  >
+                    {selectedPath === 'rfq' ? (
+                      <>
+                        <Send className="h-4 w-4" />
+                        Generate RFQ
+                      </>
+                    ) : (
+                      <>
+                        <FileText className="h-4 w-4" />
+                        Create Procurement Doc
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
         )}
       </div>
+
+      {/* Preview Modal */}
+      <AnimatePresence>
+        {showPreview && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+            onClick={() => setShowPreview(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative w-full h-full max-w-6xl max-h-[90vh] m-8 bg-white dark:bg-gray-900 rounded-lg shadow-2xl flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between p-4 border-b">
+                <h3 className="text-xl font-semibold">Procurement Document Preview</h3>
+                <Button variant="ghost" size="icon" onClick={() => setShowPreview(false)}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+              
+              <div className="flex-1 overflow-auto p-6">
+                <iframe
+                  srcDoc={previewHtml}
+                  className="w-full h-full min-h-[600px] border rounded"
+                  title="Procurement Document Preview"
+                />
+              </div>
+              
+              <div className="flex items-center justify-end gap-2 p-4 border-t">
+                <Button variant="outline" onClick={() => setShowPreview(false)}>
+                  Close
+                </Button>
+                <Button 
+                  onClick={async () => {
+                    setShowPreview(false);
+                    await handleConfirmedDownload();
+                  }}
+                >
+                  <Download className="h-4 w-4 mr-2" />
+                  Confirm & Download
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

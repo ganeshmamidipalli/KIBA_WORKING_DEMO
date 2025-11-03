@@ -19,28 +19,6 @@ import type {
 
 export class PostCartApiService {
   /**
-   * Evaluate vendors using LLM to extract complete information
-   */
-  static async evaluateVendors(vendors: any[], productName: string, budgetUsd: number, quantity: number): Promise<any> {
-    const response = await fetch(`${API_BASE}/api/post-cart/evaluate-vendors`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        vendors,
-        product_name: productName,
-        budget_usd: budgetUsd,
-        quantity
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Vendor evaluation failed: ${response.statusText}`);
-    }
-
-    return response.json();
-  }
-
-  /**
    * Evaluate G1 decision gate
    */
   static async evaluateG1(context: G1Context): Promise<CartDecision> {

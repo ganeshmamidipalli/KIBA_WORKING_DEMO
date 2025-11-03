@@ -5,6 +5,9 @@
 echo "🚀 Starting KIBA3 Project with Live Logs..."
 echo ""
 
+# Ensure logs directory exists at repo root
+mkdir -p logs
+
 # Start backend in background
 cd backend
 source .venv/bin/activate
@@ -19,7 +22,7 @@ cd ../frontend-new
 npm run dev > ../logs/frontend-live.log 2>&1 &
 FRONTEND_PID=$!
 echo "✅ Frontend started (PID: $FRONTEND_PID)"
-echo "   → http://localhost:5173"
+echo "   → http://localhost:5174"
 echo ""
 
 # Wait a bit for servers to start

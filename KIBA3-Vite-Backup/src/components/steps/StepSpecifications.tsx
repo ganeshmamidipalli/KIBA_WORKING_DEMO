@@ -253,7 +253,7 @@ export function StepSpecifications({
     setSubmittingFollowups(true);
     
     try {
-      // Save the follow-up answers and get recommendations
+      // Save the follow-up answers
       const response = await api.submitFollowups({
         session_id: kpaSessionId,
         followup_answers: followupAnswers
@@ -261,23 +261,8 @@ export function StepSpecifications({
       
       console.log("Follow-up answers saved successfully:", response);
       
-      // Store recommendations if returned
-      let selectedVariantsArray: SpecVariant[] = [];
-      if (response.recommendations) {
-        setKpaRecommendations(response.recommendations);
-        const convertedVariants = convertKPARecommendations(response.recommendations);
-        setVariants(convertedVariants);
-        
-        // Auto-select recommended variant
-        const recommendedIndex = response.recommendations.recommended_index;
-        if (convertedVariants[recommendedIndex]) {
-          selectedVariantsArray = [convertedVariants[recommendedIndex]];
-          setSelectedVariants(selectedVariantsArray);
-        }
-      }
-      
-      // Proceed to next step (AI Recommendations) immediately
-      onNext({ kpaRecommendations: response.recommendations, selectedVariants: selectedVariantsArray });
+      // Proceed to next step (Project Confirmation) immediately
+      onNext();
       
     } catch (error) {
       console.error("Error in follow-up process:", error);
@@ -430,9 +415,9 @@ export function StepSpecifications({
     })();
   }, [intakeData, setIntakeData, setFollowupAnswers, setKpaRecommendations]);
 
-  // Auto-generate recommendations if we have KPA data but no variants (only for Step 4)
+  // Auto-generate recommendations if we have KPA data but no variants (only for Step 5)
   useEffect(() => {
-    if (currentStep === 4) {
+    if (currentStep === 5) {
       if (kpaRecommendations && variants.length === 0 && !generatingRecommendations) {
         const convertedVariants = convertKPARecommendations(kpaRecommendations);
         setVariants(convertedVariants);
@@ -478,7 +463,7 @@ export function StepSpecifications({
     }
     
     console.log("StepSpecifications: Continuing with selected variants:", selectedVariants.length);
-    onNext({ kpaRecommendations, selectedVariants });
+    onNext();
   };
 
   const handleSelectVariant = (variantId: string) => {
@@ -637,8 +622,8 @@ export function StepSpecifications({
               </div>
             </div>
             <div className="flex justify-end pt-4">
-              <Button onClick={() => onNext({})} className="gap-2">
-                Continue to AI Recommendations
+              <Button onClick={onNext} className="gap-2">
+                Continue to Project Summary
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>
@@ -646,8 +631,8 @@ export function StepSpecifications({
         </Card>
       )}
 
-      {/* Step 4: Show recommendations if we have them */}
-      {currentStep === 4 && (variants.length > 0 || kpaRecommendations) && (
+      {/* Step 5: Show recommendations if we have them */}
+      {currentStep === 5 && (variants.length > 0 || kpaRecommendations) && (
         <>
           {/* Recommendations Ready Card */}
           {variants.length > 0 && (
@@ -940,8 +925,8 @@ export function StepSpecifications({
         </>
       )}
 
-      {/* Step 4: AI Processing Chain */}
-      {currentStep === 4 && showThinkingChain && (
+      {/* Step 5: AI Processing Chain */}
+      {currentStep === 5 && showThinkingChain && (
         <Card className="border-blue-500/30 bg-blue-500/5">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-lg">
@@ -992,8 +977,8 @@ export function StepSpecifications({
         </Card>
       )}
 
-      {/* Step 4: No recommendations yet - show loading or generate button */}
-      {currentStep === 4 && variants.length === 0 && !kpaRecommendations && !showThinkingChain && (
+      {/* Step 5: No recommendations yet - show loading or generate button */}
+      {currentStep === 5 && variants.length === 0 && !kpaRecommendations && !showThinkingChain && (
         <Card className="border-amber-500/30 bg-amber-500/5">
           <CardContent className="pt-6">
             <div className="flex items-center gap-4">

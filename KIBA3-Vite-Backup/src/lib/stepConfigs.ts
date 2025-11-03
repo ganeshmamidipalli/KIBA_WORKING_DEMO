@@ -113,43 +113,45 @@ export const STEP_CONFIGS: StepConfig[] = [
   },
   {
     id: 4,
-    key: 'aiRecommendations',
-    label: 'AI Recommendations',
-    title: 'AI Recommendations',
-    component: 'StepSpecifications',
+    key: 'projectSummary',
+    label: 'Project Summary',
+    title: 'Project Summary',
+    component: 'StepProjectSummary',
     required: true,
     dependencies: [3],
-    validation: (state, data) => {
-      console.log('=== STEP 4 VALIDATION DEBUG ===');
-      console.log('State:', state);
-      console.log('Data:', data);
-      
-      // Check data passed to completeCurrentStep first, then state.stepData as fallback
-      const kpaRecommendations = data?.kpaRecommendations;
-      const selectedVariants = data?.selectedVariants;
-      
-      console.log('kpaRecommendations:', !!kpaRecommendations);
-      console.log('selectedVariants:', selectedVariants?.length);
-      
-      if (!kpaRecommendations && (!selectedVariants || selectedVariants.length === 0)) {
-        console.log('❌ STEP 4 VALIDATION FAILED: No recommendations available');
-        return { isValid: false, error: 'No recommendations available' };
-      }
-      
-      console.log('✅ STEP 4 VALIDATION PASSED');
+    validation: (state) => {
+      // Project summary step is always valid once reached
       return { isValid: true };
     }
   },
   {
     id: 5,
+    key: 'aiRecommendations',
+    label: 'AI Recommendations',
+    title: 'AI Recommendations',
+    component: 'StepSpecifications',
+    required: true,
+    dependencies: [4],
+    validation: (state) => {
+      const { kpaRecommendations, selectedVariants } = state;
+      
+      if (!kpaRecommendations && (!selectedVariants || selectedVariants.length === 0)) {
+        return { isValid: false, error: 'No recommendations available' };
+      }
+      
+      return { isValid: true };
+    }
+  },
+  {
+    id: 6,
     key: 'vendorSearch',
     label: 'Vendor Search',
     title: 'Vendor Search',
     component: 'StepVendorSearch',
     required: true,
-    dependencies: [4],
+    dependencies: [5],
     validation: (state, data) => {
-      console.log('=== STEP 5 VALIDATION DEBUG ===');
+      console.log('=== STEP 6 VALIDATION DEBUG ===');
       console.log('Raw data parameter:', data);
       console.log('Raw state parameter:', state);
       console.log('Data selectedVendors:', data?.selectedVendors);
@@ -163,24 +165,24 @@ export const STEP_CONFIGS: StepConfig[] = [
       console.log('SelectedVendors truthy check:', !!selectedVendors);
       
       if (!selectedVendors || selectedVendors.length === 0) {
-        console.log('❌ STEP 5 VALIDATION FAILED: No vendors selected');
+        console.log('❌ STEP 6 VALIDATION FAILED: No vendors selected');
         return { isValid: false, error: 'Please select at least one vendor to continue' };
       }
       
-      console.log('✅ STEP 5 VALIDATION PASSED');
+      console.log('✅ STEP 6 VALIDATION PASSED');
       return { isValid: true };
     }
   },
   {
-    id: 6,
+    id: 7,
     key: 'cart',
     label: 'CART',
     title: 'CART',
     component: 'StepRFQProcurement',
     required: true,
-    dependencies: [5],
+    dependencies: [6],
     validation: (state, data) => {
-      console.log('=== STEP 6 (CART) VALIDATION DEBUG ===');
+      console.log('=== STEP 7 (CART) VALIDATION DEBUG ===');
       console.log('Raw data parameter:', data);
       console.log('Raw state parameter:', state);
       console.log('Data selectedVendors:', data?.selectedVendors);
@@ -194,11 +196,11 @@ export const STEP_CONFIGS: StepConfig[] = [
       console.log('SelectedVendors length:', selectedVendors?.length);
       
       if (!selectedVendors || selectedVendors.length === 0) {
-        console.log('❌ STEP 6 VALIDATION FAILED: No vendors selected');
+        console.log('❌ STEP 7 VALIDATION FAILED: No vendors selected');
         return { isValid: false, error: 'Please select at least one vendor for CART' };
       }
       
-      console.log('✅ STEP 6 VALIDATION PASSED');
+      console.log('✅ STEP 7 VALIDATION PASSED');
       return { isValid: true };
     }
   },
@@ -209,9 +211,9 @@ export const STEP_KEYS = {
   PROJECT_CONTEXT: 'projectContext',
   PRODUCT_DETAILS: 'productDetails',
   AI_FOLLOWUP: 'aiFollowup',
+  PROJECT_SUMMARY: 'projectSummary',
   AI_RECOMMENDATIONS: 'aiRecommendations',
   VENDOR_SEARCH: 'vendorSearch',
-  CART: 'cart',
   RFQ_GENERATION: 'rfqGeneration'
 } as const;
 
