@@ -331,6 +331,10 @@ export function StepVendorSearch({
         };
         setBatches([restoredBatch]);
         setSearchPhase('results');
+        // Restore baseQueryRef for refine search to work
+        if (baseQueryRef.current === "" && searchQuery) {
+          baseQueryRef.current = searchQuery;
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
