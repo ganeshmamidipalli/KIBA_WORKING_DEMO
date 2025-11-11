@@ -253,7 +253,7 @@ export function StepSpecifications({
     setSubmittingFollowups(true);
     
     try {
-      // Save the follow-up answers and get recommendations
+      // Save the follow-up answers (this doesn't return recommendations)
       const response = await api.submitFollowups({
         session_id: kpaSessionId,
         followup_answers: followupAnswers
@@ -261,23 +261,21 @@ export function StepSpecifications({
       
       console.log("Follow-up answers saved successfully:", response);
       
-      // Store recommendations if returned
-      let selectedVariantsArray: SpecVariant[] = [];
-      if (response.recommendations) {
-        setKpaRecommendations(response.recommendations);
-        const convertedVariants = convertKPARecommendations(response.recommendations);
-        setVariants(convertedVariants);
-        
-        // Auto-select recommended variant
-        const recommendedIndex = response.recommendations.recommended_index;
-        if (convertedVariants[recommendedIndex]) {
-          selectedVariantsArray = [convertedVariants[recommendedIndex]];
-          setSelectedVariants(selectedVariantsArray);
-        }
+      // Update intake data to reflect that questions have been answered
+      if (intakeData) {
+        setIntakeData({
+          ...intakeData,
+          missing_info_questions: [] // Clear questions since they've been answered
+        });
       }
       
-      // Proceed to next step (AI Recommendations) immediately
-      onNext({ kpaRecommendations: response.recommendations, selectedVariants: selectedVariantsArray });
+      // Proceed to next step (AI Recommendations)
+      // Recommendations will be auto-generated in Step 4
+      onNext({ 
+        kpaSessionId,
+        followupAnswers,
+        intakeData: intakeData ? { ...intakeData, missing_info_questions: [] } : null
+      });
       
     } catch (error) {
       console.error("Error in follow-up process:", error);
@@ -433,7 +431,19 @@ export function StepSpecifications({
   // Auto-generate recommendations if we have KPA data but no variants (only for Step 4)
   useEffect(() => {
     if (currentStep === 4) {
+      console.log("StepSpecifications Step 4: Auto-generation check", {
+        kpaRecommendations: !!kpaRecommendations,
+        variantsLength: variants.length,
+        generatingRecommendations,
+        kpaSessionId: !!kpaSessionId,
+        intakeData: !!intakeData,
+        missingQuestions: intakeData?.missing_info_questions?.length || 0,
+        followupAnswersCount: Object.keys(followupAnswers || {}).length
+      });
+
+      // If we already have recommendations, convert and display them
       if (kpaRecommendations && variants.length === 0 && !generatingRecommendations) {
+        console.log("StepSpecifications Step 4: Converting existing recommendations");
         const convertedVariants = convertKPARecommendations(kpaRecommendations);
         setVariants(convertedVariants);
         
@@ -442,16 +452,35 @@ export function StepSpecifications({
         if (convertedVariants[recommendedIndex]) {
           setSelectedVariants([convertedVariants[recommendedIndex]]);
         }
-      } else if (variants.length === 0 && !generatingRecommendations && !kpaRecommendations) {
+      } 
+      // If we don't have recommendations yet, generate them
+      else if (variants.length === 0 && !generatingRecommendations && !kpaRecommendations) {
+        console.log("StepSpecifications Step 4: No recommendations found, generating...");
+        
+        // Check if we have unanswered follow-up questions
+        const hasUnansweredQuestions = intakeData?.missing_info_questions?.length > 0 && 
+                                       Object.keys(followupAnswers || {}).length === 0;
+        
+        if (hasUnansweredQuestions) {
+          console.log("StepSpecifications Step 4: Waiting for follow-up answers");
+          return; // Don't generate yet, wait for follow-ups to be answered
+        }
+        
         // Generate recommendations with AI Processing Chain
         if (kpaSessionId) {
-          handleGenerateRecommendations();
+          console.log("StepSpecifications Step 4: Calling handleGenerateRecommendations");
+          // Use setTimeout to avoid calling during render
+          setTimeout(() => {
+            handleGenerateRecommendations();
+          }, 100);
         } else {
+          console.log("StepSpecifications Step 4: Calling generateRecommendations (no session)");
           setTimeout(() => generateRecommendations(), 500);
         }
       }
     }
-  }, [currentStep, kpaRecommendations, variants.length, generatingRecommendations, intakeData, kpaSessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep, kpaRecommendations, variants.length, generatingRecommendations, intakeData, kpaSessionId, followupAnswers]);
 
   const handleContinue = () => {
     if (selectedVariants.length === 0) {

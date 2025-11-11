@@ -376,4 +376,30 @@ export class StepManager {
   getError(stepId: number): string | undefined {
     return this.state.errors[stepId];
   }
+
+  // Reset all state to initial state
+  async reset(): Promise<{ success: boolean; error?: string }> {
+    try {
+      this.state = {
+        currentStep: 1,
+        completedSteps: [],
+        stepData: {},
+        errors: {},
+        loading: false
+      };
+      
+      // Clear persisted state
+      this.clearPersistedState();
+      
+      // Notify listeners
+      this.notify();
+      
+      return { success: true };
+    } catch (error) {
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  }
 }

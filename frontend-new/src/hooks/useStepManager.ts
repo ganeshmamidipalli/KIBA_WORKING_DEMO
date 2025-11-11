@@ -28,6 +28,7 @@ export interface UseStepManagerReturn {
   goNext: () => Promise<{ success: boolean; error?: string }>;
   setStepData: (stepId: number, data: any) => void;
   clearErrors: () => void;
+  reset: () => Promise<{ success: boolean; error?: string }>;
   
   // Validation
   validateCurrentStep: (data?: any) => { isValid: boolean; error?: string };
@@ -102,6 +103,11 @@ export function useStepManager(): UseStepManagerReturn {
     stepManager.clearErrors();
   }, [stepManager]);
 
+  // Reset all state
+  const reset = useCallback(async () => {
+    return stepManager.reset();
+  }, [stepManager]);
+
   // Validate current step
   const validateCurrentStep = useCallback((data?: any) => {
     return stepManager.validateStep(state.currentStep, data);
@@ -143,6 +149,7 @@ export function useStepManager(): UseStepManagerReturn {
     goNext,
     setStepData,
     clearErrors,
+    reset,
     
     // Validation
     validateCurrentStep,

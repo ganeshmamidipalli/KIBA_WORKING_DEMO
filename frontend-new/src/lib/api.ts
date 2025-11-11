@@ -37,30 +37,10 @@ export interface FollowupRequest {
 
 export interface FollowupResponse {
   session_id: string;
-  recommendations: {
-    schema_version: string;
-    summary: string;
-    recommendations: Array<{
-      id: string;
-      name: string;
-      specs: string[];
-      estimated_price_usd: number | null;
-      meets_budget: boolean;
-      value_note: string;
-      rationale: string;
-      score: number;
-      vendor_search: {
-        model_name: string;
-        spec_fragments: string[];
-        region_hint: string | null;
-        budget_hint_usd: number | null;
-        query_seed: string;
-      };
-    }>;
-    recommended_index: number;
-    selection_mode: string;
-    disclaimer: string;
-  };
+  answers: Record<string, string>;
+  message?: string;
+  // Note: Recommendations are NOT returned by submit_followups
+  // They are generated separately via generateFinalRecommendations
 }
 
 export async function uploadFiles(files: File[]) {
@@ -171,6 +151,69 @@ export async function submitFollowups(request: FollowupRequest): Promise<Followu
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Follow-up submission failed: ${response.statusText} - ${errorText}`);
+  }
+
+  return response.json();
+}
+
+export interface ValidateQuestionSelectionRequest {
+  user_thoughts: string;
+  selected_question: string;
+  current_batches: any[];
+  product_name: string;
+  selected_variant?: any;
+  kpa_recommendations?: any;
+}
+
+export interface ValidateQuestionSelectionResponse {
+  approved: boolean;
+  message?: string;
+  more_questions?: string[];
+  search_query?: string;
+}
+
+export async function validateQuestionSelection(request: ValidateQuestionSelectionRequest): Promise<ValidateQuestionSelectionResponse> {
+  const response = await fetch(`${API_BASE}/api/vendor_search/validate_question_selection`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Question validation failed: ${response.statusText} - ${errorText}`);
+  }
+
+  return response.json();
+}
+
+export interface FollowupQuestionsRequest {
+  user_thoughts: string;
+  current_batches: any[];
+  product_name: string;
+  total_vendors_found: number;
+}
+
+export interface FollowupQuestionsResponse {
+  questions: string[];
+  should_search: boolean;
+  reason?: string;
+}
+
+export async function generateVendorFollowupQuestions(request: FollowupQuestionsRequest): Promise<FollowupQuestionsResponse> {
+  const response = await fetch(`${API_BASE}/api/vendor_search/generate_followup_questions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Follow-up questions generation failed: ${response.statusText} - ${errorText}`);
   }
 
   return response.json();

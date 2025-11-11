@@ -1,26 +1,16 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   ChevronLeft, 
-  ChevronRight, 
   FileText, 
   Send, 
-  CheckCircle, 
-  Clock, 
-  AlertCircle, 
   Download, 
-  Mail, 
-  Users, 
   Shield, 
-  DollarSign, 
   AlertTriangle, 
   CheckCircle2, 
   ArrowRight,
   ExternalLink,
   Eye,
   X,
-  Plus,
-  Edit,
-  Save,
   Loader2
 } from "lucide-react";
 import { Button } from "../ui/button";
@@ -28,11 +18,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { Badge } from "../ui/badge";
-import { Progress } from "../ui/progress";
 import { useState, useEffect, useRef } from "react";
 import type { Vendor } from "../../types";
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, WidthType } from "docx";
-import { saveAs } from "file-saver";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from "docx";
+import * as FileSaver from "file-saver";
+const saveAs = FileSaver.saveAs;
 import { PostCartApiService } from "../../lib/postCartApi";
 
 // Enhanced vendor evaluation types
@@ -79,13 +69,13 @@ interface StepCARTEnhancedProps {
   technicalPOC?: string;
   projectKeys?: string[];
   popStart?: string;
+  popCompletion?: string;
 }
 
 export function StepCARTEnhanced({
   selectedVendors,
   onNext,
   onBack,
-  currentStep,
   productName = "",
   budget = "0",
   quantity = "1",
@@ -95,6 +85,7 @@ export function StepCARTEnhanced({
   technicalPOC = "",
   projectKeys = [],
   popStart = "",
+  popCompletion = "",
 }: StepCARTEnhancedProps) {
   
   // Enhanced state management
@@ -124,27 +115,39 @@ export function StepCARTEnhanced({
     department: 'IT',
     budgetCode: 'CAP-2025-NET',
     approver: '',
-    needBy: popStart, // Initialize with POP Start from Step 1
-    justification: projectScope,
+    needBy: popStart || '', // Initialize with POP Start from Step 1
+    popCompletion: popCompletion || '', // Initialize with POP Completion from Step 1
+    justification: '', // Business justification - WHY this procurement is needed (not WHAT is being procured)
     type: procurementType,
-    serviceProgram: serviceProgram,
-    technicalPOC: technicalPOC,
-    projectsSupported: projectKeys.join(', '),
-    estimatedCost: parseFloat(budget) || 0,
+    serviceProgram: serviceProgram || 'Applied Research', // Initialize from Step 1
+    technicalPOC: technicalPOC || '', // Initialize from Step 1
+    projectsSupported: projectKeys && projectKeys.length > 0 ? projectKeys.join(', ') : '', // Initialize from Step 1
+    estimatedCost: parseFloat(budget) || 0, // Initialize from Step 2
     competitionType: 'Competitive',
     multipleVendorsAvailable: selectedVendors.length > 1,
-    scopeBrief: projectScope,
+    scopeBrief: projectScope, // Technical requirements - WHAT the supplier will provide
     vendorEvaluation: [] as Array<{name: string, contact: string, status: string}>,
     vendorEvaluationDescription: ''
   });
 
   // Evaluate vendors on component mount - only once
   useEffect(() => {
+    console.log('StepCARTEnhanced: Vendor evaluation check', {
+      selectedVendorsLength: selectedVendors.length,
+      hasEvaluated: hasEvaluatedRef.current,
+      selectedVendors: selectedVendors
+    });
+
     if (selectedVendors.length > 0 && !hasEvaluatedRef.current) {
-      evaluateVendors();
+      console.log('StepCARTEnhanced: Starting vendor evaluation');
       hasEvaluatedRef.current = true;
+      evaluateVendors();
+    } else if (selectedVendors.length === 0) {
+      console.log('StepCARTEnhanced: No vendors selected, resetting evaluation flag');
+      hasEvaluatedRef.current = false;
     }
-  }, [selectedVendors]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVendors.length]);
 
   // Auto-recommend and auto-select path based on vendor completeness and bot analysis
   useEffect(() => {
@@ -196,6 +199,17 @@ export function StepCARTEnhanced({
         const contact = vendor.contact || {};
         const business = vendor.business_info || {};
         
+        // Get original vendor data to preserve purchase_url from vendor search
+        const originalVendor = selectedVendors[index] as any;
+        const originalLink = originalVendor?.website || originalVendor?.purchase_url;
+        
+        console.log(`Vendor ${index + 1} (${vendor.vendor_name}) link preservation:`, {
+          originalWebsite: originalVendor?.website,
+          originalPurchaseUrl: originalVendor?.purchase_url,
+          contactUrlFromEvaluation: contact.contact_url,
+          finalLink: originalLink || contact.contact_url || '#'
+        });
+        
         // Determine missing fields
         const missingFields: Array<"price"|"availability"|"delivery"|"contact"> = [];
         if (!pricing.unit_price) missingFields.push('price');
@@ -213,6 +227,17 @@ export function StepCARTEnhanced({
         const deliveryScore = delivery.ships_to_wichita ? 10 : 0;
         const contactScore = (contact.sales_email || contact.sales_phone) ? 10 : 0;
         const score = baseScore + priceScore + availabilityScore + deliveryScore + contactScore;
+        
+        // Prioritize original purchase_url/website from selected vendor over contact_url from evaluation
+        // This ensures the "Visit Site" link matches what user selected in vendor search
+        const finalLink = originalLink || contact.contact_url || '#';
+        const finalDomain = (() => {
+          try {
+            return new URL(finalLink).hostname.replace('www.', '');
+          } catch {
+            return 'vendor.com';
+          }
+        })();
         
         return {
           vendorName: vendor.vendor_name || `Vendor ${index + 1}`,
@@ -234,8 +259,8 @@ export function StepCARTEnhanced({
             sourceText: delivery.shipping_method || 'Extracted from vendor page'
           } : undefined,
           warranty: business.warranty || 'Unknown',
-          link: contact.contact_url || selectedVendors[index]?.purchase_url || '#',
-          domain: new URL(contact.contact_url || selectedVendors[index]?.purchase_url || 'https://vendor.com').hostname.replace('www.', ''),
+          link: finalLink, // Use original purchase_url from vendor search (preserves user's selection)
+          domain: finalDomain,
           contact: (contact.sales_email || contact.sales_phone) ? {
             email: contact.sales_email,
             phone: contact.sales_phone,
@@ -362,7 +387,7 @@ ${technicalPOC || 'Procurement Team'}`;
   // Generate HTML preview of procurement document
   const generateProcurementPreview = (): string => {
     const procDoc = generateProcurementDoc();
-    const popEnd = procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : 'TBD';
+    const popEnd = procData.popCompletion || (procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : 'TBD');
     const vendorEvalDesc = procData.vendorEvaluationDescription || evaluatedVendors.map((v, idx) => 
       `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}`
     ).join('\n\n');
@@ -520,7 +545,7 @@ ${technicalPOC || 'Procurement Team'}`;
 
   <div class="field-group">
     <span class="field-label">POP Completion Date</span>
-    <span class="field-value">${popEnd}</span>
+    <span class="field-value">${procData.popCompletion || popEnd || 'N/A'}</span>
   </div>
 
   <h2>Suggested Procurement Type*</h2>
@@ -689,7 +714,7 @@ ${technicalPOC || 'Procurement Team'}`;
   // Generate and download Procurement document as DOCX
   const generateAndDownloadProcurement = async () => {
     const procDoc = generateProcurementDoc();
-    const popEnd = procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : 'TBD';
+    const popEnd = procData.popCompletion || (procData.needBy ? new Date(new Date(procData.needBy).getTime() + 365*24*60*60*1000).toISOString().split('T')[0] : 'TBD');
     
     const content: Paragraph[] = [
       new Paragraph({
@@ -741,7 +766,7 @@ ${technicalPOC || 'Procurement Team'}`;
       new Paragraph({
         children: [
           new TextRun({ text: "POP Completion Date", bold: true }),
-          new TextRun({ text: "\n" + popEnd }),
+          new TextRun({ text: "\n" + (procData.popCompletion || popEnd || 'N/A') }),
         ],
       }),
       new Paragraph({ text: "" }),
@@ -790,23 +815,15 @@ ${technicalPOC || 'Procurement Team'}`;
         heading: HeadingLevel.HEADING_2,
       }),
       new Paragraph({ text: "Please include vendor name and contact information of all vendors evaluated." }),
-      ...(procData.vendorEvaluationDescription || evaluatedVendors.map((v, idx) => 
-        `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}`
-      )).split('\n\n').map(text => new Paragraph({ text }))
+      ...(Array.isArray(procData.vendorEvaluationDescription) 
+        ? procData.vendorEvaluationDescription.join('\n\n')
+        : procData.vendorEvaluationDescription || evaluatedVendors.map((v, idx) => 
+            `${idx + 1}. ${v.vendorName}. ${v.contact?.email ? 'Contact: ' + v.contact.email : 'Contact info to be added'}. ${v.completeness.overall === 'complete' ? 'Quote available.' : 'Quote requested.'}`
+          ).join('\n\n')
+      ).split('\n\n').map((text: string) => new Paragraph({ text }))
     ];
     
     await generateDocx(content, `Procurement_${productName.replace(/\s+/g, '_')}_${Date.now()}.docx`);
-  };
-
-  // Get procurement type explanation
-  const getProcurementTypeExplanation = (type: string): string => {
-    const explanations: Record<string, string> = {
-      'Contract': "Contract: A formal, legally binding agreement between a buyer and a vendor that outlines detailed terms, deliverables, timelines, and responsibilities for complex or high-value goods or services.",
-      'Purchase Order': "Purchase Order: A simplified procurement instrument used to authorize a vendor to provide goods or services.",
-      'Credit Card': "Credit Card: A direct purchasing method using an organizational credit card to quickly acquire goods or services without formal contracts or purchase orders.",
-      'Corporate Account Order': "Corporate Account Order: A procurement made through a vendor with whom Knowmadics has an established account or purchasing relationship (i.e. Verizon Wireless)."
-    };
-    return explanations[type] || `Procurement Type: ${type}`;
   };
 
   // Bot validation for missing critical information
@@ -1383,22 +1400,29 @@ ${technicalPOC || 'Procurement Team'}`;
               {/* Justification */}
               <div className="border-b pb-4 mb-4">
                 <label className="text-sm font-medium">Justification</label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Explain <strong>WHY</strong> this procurement is needed. Describe the business need, impact, or problem this solves. 
+                  Examples: "Design team requires high-performance workstations to handle 4K video editing and 3D rendering workloads. Current hardware cannot support modern design software, causing project delays and limiting team productivity."
+                </p>
                 <Textarea
                   value={procData.justification}
                   onChange={(e) => setProcData({...procData, justification: e.target.value})}
-                  placeholder="Explain why this procurement is needed..."
-                  rows={3}
+                  placeholder="Example: Design team requires high-performance workstations to handle 4K video editing and 3D rendering. Current hardware cannot support modern design software, causing project delays..."
+                  rows={4}
                 />
               </div>
 
               {/* Scope Brief */}
               <div className="border-b pb-4 mb-4">
                 <label className="text-sm font-medium">Scope Brief <span className="text-red-500">*</span></label>
-                <p className="text-xs text-muted-foreground mb-2">Please briefly describe the purpose of the procurement and what the supplier will provide.</p>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Describe <strong>WHAT</strong> the supplier will provide. Include technical specifications, requirements, and deliverables. 
+                  This field is pre-filled with your product requirements.
+                </p>
                 <Textarea
                   value={procData.scopeBrief}
                   onChange={(e) => setProcData({...procData, scopeBrief: e.target.value})}
-                  placeholder="Describe the scope and deliverables..."
+                  placeholder="Example: Intel i7 processor, 32GB RAM, 1TB SSD, NVIDIA RTX graphics, touchscreen with pen support, Windows 11 Pro, portable design..."
                   rows={4}
                 />
               </div>

@@ -696,7 +696,12 @@ def get_complete_vendor_analysis(
         availability = vendor.get('availability', {})
         
         # Check if vendor is complete
-        has_price = pricing.get('unit_price') is not None and pricing.get('unit_price', 0) > 0
+        unit_price = pricing.get('unit_price')
+        # Handle both numeric and string price values
+        try:
+            has_price = unit_price is not None and float(unit_price) > 0
+        except (ValueError, TypeError):
+            has_price = False
         has_contact = bool(contact.get('sales_email') or contact.get('sales_phone'))
         has_lead_time = availability.get('lead_time_days') is not None
         

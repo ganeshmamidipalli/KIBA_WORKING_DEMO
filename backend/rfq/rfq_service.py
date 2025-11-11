@@ -78,10 +78,14 @@ class RFQPayload:
             "rfq_id": rfq_id or self._generate_rfq_id(),
             "created_at": datetime.now().strftime("%Y-%m-%d"),
             "created_datetime": datetime.now().isoformat(),
-            "company_name": CONFIG.get("defaults", {}).get("company_name", "Knowmadics, Inc."),
+            "company_name": CONFIG.get("defaults", {}).get("company_name", "Knowmadics"),
             "validity_days": CONFIG.get("defaults", {}).get("validity_days", 30),
             "valid_until": (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
         }
+        
+        # Parse KMI Technical POC for signature section
+        # Expected format: "Name" or "Name, Position" or "Name\nEmail\nPhone" etc.
+        self.signature = self._parse_poc_for_signature(kmi_technical_poc)
         
         self.procurement = {
             "kind": procurement_kind,
@@ -135,6 +139,76 @@ class RFQPayload:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return f"{prefix}-{timestamp}"
     
+    def _parse_poc_for_signature(self, poc_string: str) -> Dict[str, str]:
+        """
+        Parse KMI Technical POC string to extract name, position, email, phone.
+        
+        Expected formats:
+        - "John Doe"
+        - "John Doe, Senior Engineer"
+        - "John Doe\njohn@example.com\n555-1234"
+        - "John Doe\nSenior Engineer\njohn@example.com\n555-1234"
+        """
+        if not poc_string:
+            return {
+                "name": "",
+                "position": "",
+                "email": "",
+                "phone": ""
+            }
+        
+        import re
+        lines = [line.strip() for line in poc_string.split('\n') if line.strip()]
+        parts = [part.strip() for part in poc_string.split(',') if part.strip()]
+        
+        signature = {
+            "name": "",
+            "position": "",
+            "email": "",
+            "phone": ""
+        }
+        
+        # Try to parse email and phone from lines
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        
+        if lines:
+            # First line is usually name
+            signature["name"] = lines[0]
+            
+            # Check if first line has comma (name, position)
+            if ',' in lines[0]:
+                name_parts = lines[0].split(',', 1)
+                signature["name"] = name_parts[0].strip()
+                signature["position"] = name_parts[1].strip()
+            elif len(lines) > 1:
+                # Second line might be position or email
+                second_line = lines[1]
+                if '@' in second_line:
+                    email_match = re.search(email_pattern, second_line)
+                    if email_match:
+                        signature["email"] = email_match.group()
+                else:
+                    signature["position"] = second_line
+            
+            # Look for email in remaining lines
+            for line in lines[1:]:
+                if '@' in line and not signature["email"]:
+                    email_match = re.search(email_pattern, line)
+                    if email_match:
+                        signature["email"] = email_match.group()
+                # Look for phone
+                if not signature["phone"]:
+                    # Simple phone detection
+                    if re.search(r'\d{3}[\s\-]?\d{3}[\s\-]?\d{4}', line) or re.search(r'\+?\d[\d\s\-\(\)]{7,}', line):
+                        signature["phone"] = line
+        
+        # If comma-separated format (name, position)
+        elif len(parts) >= 2:
+            signature["name"] = parts[0]
+            signature["position"] = parts[1]
+        
+        return signature
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for template rendering."""
         return {
@@ -149,7 +223,8 @@ class RFQPayload:
             "is_competitive": self.is_competitive,
             "is_single_vendor": self.is_single_vendor,
             "boilerplate": self.boilerplate,
-            "sections": self.sections
+            "sections": self.sections,
+            "signature": self.signature
         }
 
 
@@ -515,6 +590,34 @@ def _get_default_template() -> str:
         </ul>
     </div>
     {% endif %}
+
+    <!-- Signature Section -->
+    <div class="section" style="margin-top: 60px;">
+        <div class="section-title">Authorized Signature</div>
+        <div style="margin-top: 40px;">
+            <div style="margin-bottom: 60px;">
+                <div style="font-weight: bold; font-size: 16px; margin-bottom: 5px;">{{ meta.company_name }}</div>
+                {% if signature.name %}
+                <div style="margin-top: 40px;">
+                    <div style="margin-bottom: 5px;">{{ signature.name }}</div>
+                    {% if signature.position %}
+                    <div style="color: #666; font-size: 14px; margin-bottom: 5px;">{{ signature.position }}</div>
+                    {% endif %}
+                    {% if signature.email %}
+                    <div style="color: #666; font-size: 14px; margin-bottom: 5px;">{{ signature.email }}</div>
+                    {% endif %}
+                    {% if signature.phone %}
+                    <div style="color: #666; font-size: 14px; margin-bottom: 5px;">{{ signature.phone }}</div>
+                    {% endif %}
+                </div>
+                {% else %}
+                <div style="margin-top: 40px;">
+                    <div style="margin-bottom: 5px;">{{ procurement.kmi_technical_poc }}</div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
 
     <!-- Footer -->
     <div class="footer">

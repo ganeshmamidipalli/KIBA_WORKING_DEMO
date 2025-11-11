@@ -1050,6 +1050,233 @@ async def vendor_finder_endpoint(req: Request):
         logger.error(f"Error in vendor finder: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.post("/api/vendor_search/generate_followup_questions")
+async def generate_vendor_followup_questions(req: Request):
+    """
+    Generate intelligent follow-up questions based on user thoughts and current search results.
+    
+    Expected payload:
+    {
+        "user_thoughts": "string",
+        "current_batches": [...],
+        "product_name": "string",
+        "total_vendors_found": number
+    }
+    """
+    try:
+        body = await req.json()
+        user_thoughts = body.get("user_thoughts", "").strip()
+        current_batches = body.get("current_batches", [])
+        product_name = body.get("product_name", "")
+        total_vendors = body.get("total_vendors_found", 0)
+        
+        if not user_thoughts:
+            return JSONResponse({"questions": [], "should_search": True}, status_code=200)
+        
+        # Analyze user thoughts to determine if follow-up questions are needed
+        client = get_client()
+        if not client:
+            # Fallback: simple heuristic-based questions
+            questions = []
+            if total_vendors < 5:
+                questions.append("Find more vendors with better pricing")
+            if "price" in user_thoughts.lower() or "cost" in user_thoughts.lower():
+                questions.append("Search for vendors with volume discounts")
+            if "delivery" in user_thoughts.lower() or "ship" in user_thoughts.lower():
+                questions.append("Find vendors with faster delivery to Wichita, KS")
+            if "warranty" in user_thoughts.lower():
+                questions.append("Search for vendors with extended warranty options")
+            
+            return JSONResponse({
+                "questions": questions[:3],
+                "should_search": len(questions) < 2  # Search if few questions
+            }, status_code=200)
+        
+        # Use LLM to generate contextual follow-up questions
+        system_prompt = """You are a procurement assistant. Analyze user thoughts about vendor search results and determine if follow-up questions are needed before searching again.
+
+If the user's thoughts are clear and actionable (e.g., "find cheaper options", "need faster delivery"), proceed with search.
+If the user's thoughts are vague or need clarification (e.g., "not sure", "maybe better"), generate 2-3 clarifying questions.
+
+Return JSON: {"questions": ["question1", "question2"], "should_search": true/false, "reason": "brief explanation"}
+"""
+        
+        user_prompt = f"""User thoughts: "{user_thoughts}"
+Product: {product_name}
+Total vendors found so far: {total_vendors}
+Current batches: {len(current_batches)}
+
+Based on the user's thoughts, generate 2-3 specific, contextual follow-up questions that would help refine the search.
+Focus on clarifying what the user mentioned (e.g., if they mention "64 GB RAM", ask about RAM requirements).
+If the user's thoughts are already clear and actionable, return empty questions array.
+
+Return JSON: {{"questions": ["question1", "question2"], "should_search": true/false, "reason": "brief explanation"}}"""
+        
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.3,
+                max_tokens=300,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+            
+            result = json.loads(resp.choices[0].message.content or "{}")
+            questions = result.get("questions", [])
+            should_search = result.get("should_search", True)
+            
+            return JSONResponse({
+                "questions": questions[:3],
+                "should_search": should_search,
+                "reason": result.get("reason", "")
+            }, status_code=200)
+            
+        except Exception as e:
+            logger.error(f"Error generating follow-up questions: {e}")
+            # Fallback to search
+            return JSONResponse({
+                "questions": [],
+                "should_search": True
+            }, status_code=200)
+            
+    except Exception as e:
+        logger.error(f"Error in generate_followup_questions: {e}")
+        return JSONResponse({"error": str(e), "questions": [], "should_search": True}, status_code=500)
+
+@app.post("/api/vendor_search/validate_question_selection")
+async def validate_question_selection(req: Request):
+    """
+    Validate user's selected question and determine if search can proceed.
+    Uses LLM to check if the selected question is satisfactory based on user thoughts and selected specifications.
+    
+    Expected payload:
+    {
+        "user_thoughts": "string",
+        "selected_question": "string",
+        "current_batches": [...],
+        "product_name": "string",
+        "selected_variant": {...},
+        "kpa_recommendations": {...}
+    }
+    """
+    try:
+        body = await req.json()
+        user_thoughts = body.get("user_thoughts", "").strip()
+        selected_question = body.get("selected_question", "").strip()
+        current_batches = body.get("current_batches", [])
+        product_name = body.get("product_name", "")
+        selected_variant = body.get("selected_variant", {})
+        kpa_recommendations = body.get("kpa_recommendations", {})
+        
+        if not selected_question:
+            return JSONResponse({
+                "approved": False,
+                "message": "No question selected",
+                "more_questions": []
+            }, status_code=200)
+        
+        client = get_client()
+        if not client:
+            # Fallback: approve if question is clear
+            return JSONResponse({
+                "approved": True,
+                "message": "Proceeding with search",
+                "search_query": selected_question
+            }, status_code=200)
+        
+        # Extract key information from selected variant and recommendations
+        variant_info = ""
+        if selected_variant:
+            variant_info = f"""
+Selected Variant:
+- Title: {selected_variant.get('title', 'N/A')}
+- Summary: {selected_variant.get('summary', 'N/A')}
+- Estimated Price: ${selected_variant.get('est_unit_price_usd', 0)}
+- Lead Time: {selected_variant.get('lead_time_days', 'N/A')} days
+"""
+        
+        recommendations_info = ""
+        if kpa_recommendations:
+            recs = kpa_recommendations.get('recommendations', [])
+            if recs:
+                recommendations_info = f"\nAvailable Recommendations: {len(recs)} variants"
+        
+        system_prompt = """You are a procurement assistant validating a user's question selection for vendor search refinement.
+
+Your task:
+1. Analyze if the selected question is clear and actionable for vendor search
+2. Check if it aligns with the user's original thoughts and selected specifications
+3. If the question is satisfactory, approve it and generate a refined search query
+4. If the question needs clarification, generate 2-3 more specific questions
+
+Return JSON: {
+    "approved": true/false,
+    "message": "brief explanation",
+    "more_questions": ["question1", "question2"] (only if not approved),
+    "search_query": "refined search query" (only if approved)
+}"""
+        
+        user_prompt = f"""User's original thoughts: "{user_thoughts}"
+Selected question: "{selected_question}"
+Product: {product_name}
+Current batches: {len(current_batches)}
+{variant_info}
+{recommendations_info}
+
+Is the selected question clear and actionable for vendor search? 
+- If YES: Approve and generate a refined search query that combines the user's thoughts with the selected question
+- If NO: Generate 2-3 more specific questions to clarify the user's intent
+
+Consider:
+- Does the question address what the user mentioned?
+- Is it specific enough to generate a good vendor search?
+- Does it align with the selected product specifications?"""
+        
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0.3,
+                max_tokens=400,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+            
+            result = json.loads(resp.choices[0].message.content or "{}")
+            approved = result.get("approved", False)
+            message = result.get("message", "")
+            more_questions = result.get("more_questions", [])
+            search_query = result.get("search_query", selected_question)
+            
+            return JSONResponse({
+                "approved": approved,
+                "message": message,
+                "more_questions": more_questions[:3] if not approved else [],
+                "search_query": search_query if approved else None
+            }, status_code=200)
+            
+        except Exception as e:
+            logger.error(f"Error validating question selection: {e}")
+            # Fallback: approve and proceed
+            return JSONResponse({
+                "approved": True,
+                "message": "Proceeding with search",
+                "search_query": selected_question
+            }, status_code=200)
+            
+    except Exception as e:
+        logger.error(f"Error in validate_question_selection: {e}")
+        return JSONResponse({
+            "error": str(e),
+            "approved": True,
+            "search_query": body.get("selected_question", "")
+        }, status_code=500)
+
 def generate_vendor_search_query(selected_variant: dict, kpa_recommendations: dict = None) -> str:
     """Generate enhanced search query for vendor finding."""
     product_name = selected_variant.get("title", "")

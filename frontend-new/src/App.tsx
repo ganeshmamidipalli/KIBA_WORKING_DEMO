@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Moon, Sun, CheckCircle2, Circle, AlertCircle, CheckCircle } from "lucide-react";
+import { Moon, Sun, CheckCircle2, Circle, AlertCircle, CheckCircle, Plus } from "lucide-react";
 import { useTheme } from "./components/theme-provider";
 import { Button } from "./components/ui/button";
 import { Progress } from "./components/ui/progress";
@@ -73,10 +73,51 @@ export default function App() {
   const [kpaRecommendations, setKpaRecommendations] = useState<KPARecommendations | null>(null);
 
   // Step 4: Vendor Search
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchOutputText, setSearchOutputText] = useState("");
+  // Load persisted search data
+  const loadSearchData = () => {
+    try {
+      const savedQuery = localStorage.getItem('kiba3_search_query');
+      const savedOutput = localStorage.getItem('kiba3_search_output');
+      const savedVendors = localStorage.getItem('kiba3_selected_vendors');
+      return {
+        query: savedQuery || "",
+        output: savedOutput || "",
+        vendors: savedVendors ? JSON.parse(savedVendors) : []
+      };
+    } catch (error) {
+      console.error('Error loading persisted search data:', error);
+      return { query: "", output: "", vendors: [] };
+    }
+  };
+
+  const persistedSearchData = loadSearchData();
+  const [searchQuery, setSearchQuery] = useState(persistedSearchData.query);
+  const [searchOutputText, setSearchOutputText] = useState(persistedSearchData.output);
   const [searching, setSearching] = useState(false);
-  const [selectedVendors, setSelectedVendors] = useState<any[]>([]);
+  const [selectedVendors, setSelectedVendors] = useState<any[]>(persistedSearchData.vendors);
+  
+  // Persist search query
+  useEffect(() => {
+    if (searchQuery) {
+      localStorage.setItem('kiba3_search_query', searchQuery);
+    }
+  }, [searchQuery]);
+  
+  // Persist search output
+  useEffect(() => {
+    if (searchOutputText) {
+      localStorage.setItem('kiba3_search_output', searchOutputText);
+    }
+  }, [searchOutputText]);
+  
+  // Persist selected vendors
+  useEffect(() => {
+    if (selectedVendors.length > 0) {
+      localStorage.setItem('kiba3_selected_vendors', JSON.stringify(selectedVendors));
+    } else {
+      localStorage.removeItem('kiba3_selected_vendors');
+    }
+  }, [selectedVendors]);
 
   // Step 5: RFQ
   const [generatedRFQ, setGeneratedRFQ] = useState<RFQResult | null>(null);
@@ -109,6 +150,18 @@ export default function App() {
         if (stepData.selectedVendors) {
           console.log("App: Setting selectedVendors:", stepData.selectedVendors);
           setSelectedVendors(stepData.selectedVendors);
+          // Persist immediately
+          localStorage.setItem('kiba3_selected_vendors', JSON.stringify(stepData.selectedVendors));
+        }
+        if (stepData.rawOutput) {
+          console.log("App: Setting searchOutputText:", stepData.rawOutput);
+          setSearchOutputText(stepData.rawOutput);
+          localStorage.setItem('kiba3_search_output', stepData.rawOutput);
+        }
+        if (stepData.generatedQuery) {
+          console.log("App: Setting searchQuery:", stepData.generatedQuery);
+          setSearchQuery(stepData.generatedQuery);
+          localStorage.setItem('kiba3_search_query', stepData.generatedQuery);
         }
         if (stepData.kpaRecommendations) {
           console.log("App: Setting kpaRecommendations:", stepData.kpaRecommendations);
@@ -169,6 +222,60 @@ export default function App() {
     }
   };
 
+  // Reset all state and start new request
+  const handleNewRequest = async () => {
+    try {
+      // Reset step manager
+      const result = await stepManager.reset();
+      
+      if (result.success) {
+        // Reset all form state
+        setProcurementType("");
+        setServiceProgram("");
+        setTechnicalPOC("");
+        setSelectedProject("");
+        setPopStart("");
+        setPopCompletion("");
+        setProductName("");
+        setCategory("");
+        setQuantity("");
+        setBudget("");
+        setProjectScope("");
+        setAttachments([]);
+        setVendors([]);
+        setVariants([]);
+        setSelectedVariants([]);
+        setGeneratingRecommendations(false);
+        setAiRecommendation(null);
+        setKpaSessionId(null);
+        setIntakeData(null);
+        setFollowupAnswers({});
+        setKpaRecommendations(null);
+        setSearchQuery("");
+        setSearchOutputText("");
+        setSearching(false);
+        setSelectedVendors([]);
+        setGeneratedRFQ(null);
+        setGeneratingRFQ(false);
+        
+        // Clear persisted search data
+        localStorage.removeItem('kiba3_search_query');
+        localStorage.removeItem('kiba3_search_output');
+        localStorage.removeItem('kiba3_selected_vendors');
+        localStorage.removeItem('kiba3_vendor_search_batches');
+        localStorage.removeItem('kiba3_vendor_search_selected');
+        localStorage.removeItem('kiba3_vendor_search_base_query');
+        
+        addNotification('success', 'New request started! All data has been reset.');
+      } else {
+        addNotification('error', `Failed to reset: ${result.error}`);
+      }
+    } catch (error) {
+      console.error('Error in handleNewRequest:', error);
+      addNotification('error', 'An unexpected error occurred while resetting');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background transition-colors duration-300">
       {/* Header */}
@@ -188,18 +295,29 @@ export default function App() {
             </div>
           </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="rounded-full"
-          >
-            {theme === "dark" ? (
-              <Sun className="h-5 w-5" />
-            ) : (
-              <Moon className="h-5 w-5" />
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleNewRequest}
+              className="gap-2"
+            >
+              <Plus className="h-4 w-4" />
+              New Request
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              className="rounded-full"
+            >
+              {theme === "dark" ? (
+                <Sun className="h-5 w-5" />
+              ) : (
+                <Moon className="h-5 w-5" />
+              )}
+            </Button>
+          </div>
         </div>
       </header>
 

@@ -7,12 +7,15 @@ import {
   Loader2,
   CheckCircle2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ExternalLink,
+  DollarSign
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
 import { findVendors } from "../../lib/api";
+import { generateVendorFollowupQuestions, validateQuestionSelection } from "../../lib/api";
 import type { SpecVariant, KPARecommendations } from "../../types";
 
 interface VendorItem {
@@ -79,23 +82,101 @@ export function StepVendorSearch({
 }: StepVendorSearchProps) {
   
   // Core state
-  const [batches, setBatches] = useState<Batch[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [searchPhase, setSearchPhase] = useState<'idle' | 'thinking' | 'results'>('idle');
+  // Storage keys for persistence
+  const STORAGE_KEY_BATCHES = 'kiba3_vendor_search_batches';
+  const STORAGE_KEY_SELECTED = 'kiba3_vendor_search_selected';
+  const STORAGE_KEY_BASE_QUERY = 'kiba3_vendor_search_base_query';
+  
+  // Load persisted data on mount
+  const loadPersistedData = () => {
+    try {
+      const savedBatches = localStorage.getItem(STORAGE_KEY_BATCHES);
+      const savedSelected = localStorage.getItem(STORAGE_KEY_SELECTED);
+      const savedBaseQuery = localStorage.getItem(STORAGE_KEY_BASE_QUERY);
+      
+      if (savedBatches) {
+        const parsedBatches = JSON.parse(savedBatches);
+        if (Array.isArray(parsedBatches) && parsedBatches.length > 0) {
+          return {
+            batches: parsedBatches,
+            selected: savedSelected ? new Set(JSON.parse(savedSelected)) : new Set(),
+            baseQuery: savedBaseQuery || ""
+          };
+        }
+      }
+    } catch (error) {
+      console.error('Error loading persisted vendor search data:', error);
+    }
+    return { batches: [], selected: new Set(), baseQuery: "" };
+  };
+
+  const persistedData = loadPersistedData();
+  
+  const [batches, setBatches] = useState<Batch[]>(persistedData.batches);
+  const [selected, setSelected] = useState<Set<string>>(persistedData.selected);
+  const [searchPhase, setSearchPhase] = useState<'idle' | 'thinking' | 'results'>(
+    persistedData.batches.length > 0 ? 'results' : 'idle'
+  );
   const [currentThinkingStep, setCurrentThinkingStep] = useState(0);
   const [refineInput, setRefineInput] = useState("");
+  const [followUpQuestions, setFollowUpQuestions] = useState<string[]>([]);
+  const [showFollowUpSuggestions, setShowFollowUpSuggestions] = useState(false);
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [debounceTimer, setDebounceTimer] = useState<NodeJS.Timeout | null>(null);
+  const [selectedQuestion, setSelectedQuestion] = useState<string | null>(null);
+  const [validatingSelection, setValidatingSelection] = useState(false);
+  const [validationResult, setValidationResult] = useState<{approved: boolean, message?: string, moreQuestions?: string[]} | null>(null);
   
   // Abort controller for canceling searches
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // First run flag to ensure we only show thinking on initial search
-  const firstRunRef = useRef(true);
+  const firstRunRef = useRef(persistedData.batches.length === 0);
   
   // Track if we've started the first search to prevent re-runs
-  const hasSearchedRef = useRef(false);
+  const hasSearchedRef = useRef(persistedData.batches.length > 0);
   
   // Track the base query to prevent cumulative refinement
-  const baseQueryRef = useRef<string>("");
+  const baseQueryRef = useRef<string>(persistedData.baseQuery);
+  
+  // Persist batches whenever they change
+  useEffect(() => {
+    try {
+      if (batches.length > 0) {
+        localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(batches));
+        console.log('StepVendorSearch: Persisted batches to localStorage:', batches.length);
+      } else {
+        localStorage.removeItem(STORAGE_KEY_BATCHES);
+      }
+    } catch (error) {
+      console.error('Error persisting batches:', error);
+    }
+  }, [batches]);
+  
+  // Persist selected vendors whenever they change
+  useEffect(() => {
+    try {
+      if (selected.size > 0) {
+        localStorage.setItem(STORAGE_KEY_SELECTED, JSON.stringify(Array.from(selected)));
+        console.log('StepVendorSearch: Persisted selected vendors to localStorage:', selected.size);
+      } else {
+        localStorage.removeItem(STORAGE_KEY_SELECTED);
+      }
+    } catch (error) {
+      console.error('Error persisting selected vendors:', error);
+    }
+  }, [selected]);
+  
+  // Helper function to persist base query
+  const persistBaseQuery = () => {
+    try {
+      if (baseQueryRef.current) {
+        localStorage.setItem(STORAGE_KEY_BASE_QUERY, baseQueryRef.current);
+      }
+    } catch (error) {
+      console.error('Error persisting base query:', error);
+    }
+  };
   
   // Parse vendors from output text
   const parseVendorsFromOutput = (text: string, modelName: string): VendorItem[] => {
@@ -104,7 +185,60 @@ export function StepVendorSearch({
     const sections = text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
     const urlRegex = /(https?:\/\/[^\s)]+)\b/g;
 
+    // Patterns that indicate informational/introductory text (not vendors)
+    const infoPatterns = [
+      /^here are/i,
+      /^below are/i,
+      /^these are/i,
+      /^you can/i,
+      /^all links/i,
+      /^no third-party/i,
+      /^reputable.*retailers/i,
+      /^authorized.*retailers/i,
+      /^u\.?s\.?-based/i,
+      /^where you can purchase/i,
+      /^product page/i,
+      /^marketplace listings/i,
+    ];
+
+    // Check if section is informational text
+    const isInformationalText = (section: string): boolean => {
+      const firstLine = section.split("\n")[0] || "";
+      const lowerFirstLine = firstLine.toLowerCase();
+      
+      // Check for informational patterns
+      if (infoPatterns.some(pattern => pattern.test(lowerFirstLine))) {
+        return true;
+      }
+      
+      // Check if it's just the product name (matches modelName exactly or closely)
+      const normalizedProduct = modelName.toLowerCase().trim();
+      const normalizedFirstLine = firstLine.toLowerCase().trim();
+      if (normalizedFirstLine === normalizedProduct || 
+          normalizedFirstLine.includes(normalizedProduct) && firstLine.length < 100) {
+        return true;
+      }
+      
+      // Check if section is too long without URLs (likely descriptive text)
+      const urls = Array.from(section.matchAll(urlRegex));
+      if (section.length > 200 && urls.length === 0) {
+        return true;
+      }
+      
+      // Check if it's a sentence describing vendors rather than listing one
+      if (firstLine.includes('where') && firstLine.includes('can') && firstLine.length > 50) {
+        return true;
+      }
+      
+      return false;
+    };
+
     for (const sec of sections) {
+      // Skip informational sections
+      if (isInformationalText(sec)) {
+        continue;
+      }
+
       const firstLine = sec.split("\n")[0] || "";
       const nameMatch = firstLine
         .replace(/^[-•\d.\s]+/, "")
@@ -112,7 +246,16 @@ export function StepVendorSearch({
         .trim();
 
       const urls = Array.from(sec.matchAll(urlRegex)).map(m => m[1]);
+      
+      // Skip if no vendor name and no URL (not a valid vendor entry)
       if (!nameMatch && urls.length === 0) continue;
+      
+      // Skip if name matches product name exactly (it's product info, not vendor)
+      const normalizedName = nameMatch.toLowerCase().trim();
+      const normalizedProduct = modelName.toLowerCase().trim();
+      if (normalizedName === normalizedProduct && urls.length === 0) {
+        continue;
+      }
 
       const vendor: VendorItem = {
         id: `vendor-${id++}`,
@@ -128,7 +271,14 @@ export function StepVendorSearch({
         isSelected: false
       };
 
-      if (!results.some(v => v.vendor_name === vendor.vendor_name || (v.purchase_url && v.purchase_url === vendor.purchase_url))) {
+      // Only add if it has a valid vendor name (not just product name) or a URL
+      const hasValidVendorName = vendor.vendor_name && 
+                                  vendor.vendor_name.toLowerCase() !== normalizedProduct &&
+                                  vendor.vendor_name.length > 2;
+      
+      if ((hasValidVendorName || vendor.purchase_url) && 
+          !results.some(v => v.vendor_name === vendor.vendor_name || 
+                            (v.purchase_url && v.purchase_url === vendor.purchase_url))) {
         results.push(vendor);
       }
     }
@@ -199,6 +349,7 @@ export function StepVendorSearch({
     // Store base query on first search (without refinement)
     if (!withThoughts && baseQueryRef.current === "") {
       baseQueryRef.current = query;
+      persistBaseQuery();
     }
     
     try {
@@ -245,18 +396,29 @@ export function StepVendorSearch({
       setBatches(prev => {
         // Create new batch with vendors
         const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+        const batchNumber = prev.length + 1;
         const newBatch: Batch = {
           id: Date.now(),
-          title: `Batch #${prev.length + 1} – Search Results`,
+          title: `Batch #${batchNumber} – Search Results`,
           query: combinedQuery,
           items: vendors,
           createdAt: now,
           expanded: true
         };
         
+        // Collapse previous batches and add new batch at the end (below previous batches)
         const updated = prev.map(b => ({ ...b, expanded: false }));
-        const newBatches = [newBatch, ...updated];
+        const newBatches = [...updated, newBatch]; // New batches appear below
         console.log('Updated batches, new count:', newBatches.length);
+        
+        // Persist batches immediately
+        try {
+          localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(newBatches));
+          console.log('StepVendorSearch: Persisted batches immediately:', newBatches.length);
+        } catch (error) {
+          console.error('Error persisting batches:', error);
+        }
+        
         return newBatches;
       });
 
@@ -297,23 +459,64 @@ export function StepVendorSearch({
 
   // Auto-run search exactly once on first entry into this step
   useEffect(() => {
-    if (selectedVariants.length === 0) return;
+    console.log('StepVendorSearch: Auto-search effect triggered', {
+      selectedVariantsLength: selectedVariants.length,
+      hasSearched: hasSearchedRef.current,
+      batchesLength: batches.length,
+      searching,
+      searchQuery: searchQuery?.trim()
+    });
 
-    const sid = typeof window !== 'undefined' ? (localStorage.getItem('kiba3_session_id') || 'no-session') : 'no-session';
-    const autorunKey = `${sid}:vendor_autorun_done`;
-    const alreadyDone = typeof window !== 'undefined' ? localStorage.getItem(autorunKey) === '1' : false;
+    if (selectedVariants.length === 0) {
+      console.log('StepVendorSearch: No selected variants, skipping auto-search');
+      return;
+    }
 
-    if (!alreadyDone && !hasSearchedRef.current && batches.length === 0) {
+    // Check if we should auto-run search
+    if (!hasSearchedRef.current && batches.length === 0 && !searching) {
       hasSearchedRef.current = true;
-      try {
-        const initialQuery = (searchQuery && searchQuery.trim()) || selectedVariants[0]?.title || productName || 'vendor search';
-        void performSearch(initialQuery);
-      } finally {
-        try { if (typeof window !== 'undefined') localStorage.setItem(autorunKey, '1'); } catch {}
+      console.log('StepVendorSearch: Auto-running initial search');
+      
+      // Generate search query from recommendations if available
+      let initialQuery = searchQuery?.trim();
+      if (!initialQuery && kpaRecommendations && selectedVariants.length > 0) {
+        // Generate query from KPA recommendations
+        const selectedVariant = selectedVariants[0];
+        const selectedRecommendation = kpaRecommendations.recommendations?.find(
+          rec => rec.id === selectedVariant.id
+        );
+        
+        if (selectedRecommendation?.vendor_search) {
+          const vendorSearch = selectedRecommendation.vendor_search;
+          initialQuery = vendorSearch.query_seed || "";
+          initialQuery = initialQuery
+            .replace(/\{MODEL\}/g, vendorSearch.model_name || productName)
+            .replace(/\{SPECBITS\}/g, vendorSearch.spec_fragments?.join(" ") || "")
+            .replace(/\{REGION\}/g, vendorSearch.region_hint || "")
+            .replace(/\{BUDGET\}/g, vendorSearch.budget_hint_usd?.toString() || "");
+          
+          if (!initialQuery || initialQuery === vendorSearch.query_seed) {
+            const model = vendorSearch.model_name || productName;
+            const specs = vendorSearch.spec_fragments?.join(" ") || "";
+            const budget = vendorSearch.budget_hint_usd ? `under $${vendorSearch.budget_hint_usd}` : "";
+            initialQuery = `best ${model} ${specs} ${budget} vendors suppliers distributors`.trim();
+          }
+          setSearchQuery(initialQuery);
+        }
       }
+      
+      if (!initialQuery) {
+        initialQuery = selectedVariants[0]?.title || productName || 'vendor search';
+      }
+      
+      console.log('StepVendorSearch: Initial query:', initialQuery);
+      // Use setTimeout to ensure state is ready
+      setTimeout(() => {
+        performSearch(initialQuery);
+      }, 100);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedVariants.length]);
+  }, [selectedVariants.length, batches.length, searching]);
 
   // Restore batches from searchOutputText when returning to this step
   useEffect(() => {
@@ -331,9 +534,11 @@ export function StepVendorSearch({
         };
         setBatches([restoredBatch]);
         setSearchPhase('results');
+        hasSearchedRef.current = true;
         // Restore baseQueryRef for refine search to work
         if (baseQueryRef.current === "" && searchQuery) {
           baseQueryRef.current = searchQuery;
+          persistBaseQuery();
         }
       }
     }
@@ -354,12 +559,171 @@ export function StepVendorSearch({
     }
   }, [searchOutputText, batches, searching, productName, searchQuery]);
 
-  const handleRefineSearch = () => {
-    if (!refineInput.trim()) return;
-    const lastQuery = batches[0]?.query || searchQuery || baseQueryRef.current;
-    performSearch(lastQuery, refineInput.trim());
-    setRefineInput("");
+  // Generate intelligent follow-up questions based on user thoughts and current results
+  const generateFollowUpQuestions = async (userThoughts: string, currentBatches: Batch[]): Promise<string[]> => {
+    const totalVendors = currentBatches.reduce((sum, b) => sum + b.items.length, 0);
+    
+    try {
+      const response = await generateVendorFollowupQuestions({
+        user_thoughts: userThoughts,
+        current_batches: currentBatches.map(b => ({
+          id: b.id,
+          title: b.title,
+          query: b.query,
+          item_count: b.items.length
+        })),
+        product_name: productName,
+        total_vendors_found: totalVendors
+      });
+      
+      return response.questions || [];
+    } catch (error) {
+      console.error("Error generating follow-up questions:", error);
+      // Fallback to simple questions
+      const questions: string[] = [];
+      if (totalVendors < 5) {
+        questions.push("Find more vendors with better pricing");
+      }
+      if (userThoughts.toLowerCase().includes("price") || userThoughts.toLowerCase().includes("cost")) {
+        questions.push("Search for vendors with volume discounts");
+      }
+      if (userThoughts.toLowerCase().includes("delivery") || userThoughts.toLowerCase().includes("ship")) {
+        questions.push("Find vendors with faster delivery to Wichita, KS");
+      }
+      return questions.slice(0, 3);
+    }
   };
+
+  // Validate user's selected question and determine if search can proceed
+  const handleQuestionSelection = async (question: string) => {
+    setSelectedQuestion(question);
+    setValidatingSelection(true);
+    setValidationResult(null);
+    
+    try {
+      const selectedVariant = selectedVariants[0];
+      const response = await validateQuestionSelection({
+        user_thoughts: refineInput.trim(),
+        selected_question: question,
+        current_batches: batches.map(b => ({
+          id: b.id,
+          title: b.title,
+          query: b.query,
+          item_count: b.items.length
+        })),
+        product_name: productName,
+        selected_variant: selectedVariant,
+        kpa_recommendations: kpaRecommendations
+      });
+      
+      setValidationResult(response);
+      
+      if (response.approved) {
+        // LLM approved - proceed with search
+        const searchQuery = response.search_query || question;
+        const lastQuery = batches.length > 0 ? batches[batches.length - 1].query : (searchQuery || baseQueryRef.current);
+        performSearch(lastQuery, searchQuery);
+        setRefineInput("");
+        setFollowUpQuestions([]);
+        setShowFollowUpSuggestions(false);
+        setSelectedQuestion(null);
+        setValidationResult(null);
+      } else if (response.more_questions && response.more_questions.length > 0) {
+        // LLM needs more clarification - show more questions
+        setFollowUpQuestions(response.more_questions);
+        setShowFollowUpSuggestions(true);
+      }
+      
+    } catch (error) {
+      console.error("Error validating question selection:", error);
+      // Fallback: proceed with search
+      const lastQuery = batches.length > 0 ? batches[batches.length - 1].query : (searchQuery || baseQueryRef.current);
+      performSearch(lastQuery, question);
+      setRefineInput("");
+      setFollowUpQuestions([]);
+      setShowFollowUpSuggestions(false);
+      setSelectedQuestion(null);
+    } finally {
+      setValidatingSelection(false);
+    }
+  };
+
+  const handleRefineSearch = async () => {
+    if (!refineInput.trim()) return;
+    
+    const userThoughts = refineInput.trim();
+    
+    // Proceed with search directly (questions already shown below if needed)
+    const lastQuery = batches.length > 0 ? batches[batches.length - 1].query : (searchQuery || baseQueryRef.current);
+    performSearch(lastQuery, userThoughts);
+    setRefineInput("");
+    setFollowUpQuestions([]);
+    setShowFollowUpSuggestions(false);
+    
+    // Generate new follow-up questions after search completes
+    setTimeout(async () => {
+      setBatches(currentBatches => {
+        generateFollowUpQuestions("", currentBatches).then(newQuestions => {
+          // Don't auto-show questions after search - wait for user input
+          setFollowUpQuestions([]);
+          setShowFollowUpSuggestions(false);
+        });
+        return currentBatches;
+      });
+    }, 1500);
+  };
+
+  // Generate follow-up questions when user types thoughts
+  useEffect(() => {
+    // Clear previous timer
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+    }
+
+    // Don't generate questions if input is empty or too short
+    if (!refineInput.trim() || refineInput.trim().length < 10) {
+      setFollowUpQuestions([]);
+      setShowFollowUpSuggestions(false);
+      return;
+    }
+
+    // Debounce: Wait 1 second after user stops typing
+    const timer = setTimeout(async () => {
+      setGeneratingQuestions(true);
+      try {
+        const questions = await generateFollowUpQuestions(refineInput.trim(), batches);
+        if (questions.length > 0) {
+          setFollowUpQuestions(questions);
+          setShowFollowUpSuggestions(true);
+        } else {
+          setFollowUpQuestions([]);
+          setShowFollowUpSuggestions(false);
+        }
+      } catch (error) {
+        console.error("Error generating questions:", error);
+        setFollowUpQuestions([]);
+        setShowFollowUpSuggestions(false);
+      } finally {
+        setGeneratingQuestions(false);
+      }
+    }, 1000); // 1 second debounce
+
+    setDebounceTimer(timer);
+
+    // Cleanup
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [refineInput, batches.length]);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+    };
+  }, []);
 
   const handleBack = () => {
     // Cancel any in-flight search
@@ -494,54 +858,113 @@ export function StepVendorSearch({
                       ) : (
                         batch.items.map((vendor, idx) => {
                           const isSelected = selected.has(vendor.id);
+                          // Extract domain from URL for cleaner display
+                          const getDomain = (url: string) => {
+                            try {
+                              return new URL(url).hostname.replace('www.', '');
+                            } catch {
+                              return url.length > 40 ? url.substring(0, 40) + '...' : url;
+                            }
+                          };
+                          
+                          // Format price
+                          const formatPrice = (price: string | undefined) => {
+                            if (!price) return null;
+                            // Try to extract numeric value
+                            const match = price.match(/[\d,]+\.?\d*/);
+                            if (match) {
+                              const num = parseFloat(match[0].replace(/,/g, ''));
+                              return isNaN(num) ? price : `$${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                            }
+                            return price;
+                          };
+                          
                       return (
                             <div
                               key={vendor.id}
-                              className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${
+                              className={`flex items-start gap-4 p-4 rounded-lg border transition-colors ${
                                 isSelected 
                                   ? "border-green-500 bg-green-500/10" 
                                   : "border-muted hover:border-primary/50"
                               }`}
                             >
-                              <div className="flex-shrink-0">
-                    <input 
-                      type="checkbox" 
+                              {/* Checkbox */}
+                              <div className="flex-shrink-0 pt-1">
+                                <input 
+                                  type="checkbox" 
                                   checked={isSelected}
                                   onChange={() => toggleVendorSelection(vendor.id)}
-                                  className="w-5 h-5 rounded border-muted-foreground"
-                    />
-                  </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-semibold text-sm">
-                                  {idx + 1}. {vendor.vendor_name}
+                                  className="w-5 h-5 rounded border-muted-foreground cursor-pointer"
+                                />
+                              </div>
+                              
+                              {/* Main Content */}
+                              <div className="flex-1 min-w-0 space-y-2">
+                                {/* Vendor Name */}
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex-1">
+                                    <h4 className="font-semibold text-base text-gray-900">
+                                      {vendor.vendor_name}
+                                    </h4>
+                                    {/* Product/Model Name */}
+                                    {(vendor.product_name || vendor.model) && (
+                                      <div className="text-sm text-gray-600 mt-1">
+                                        {vendor.product_name && vendor.product_name !== vendor.vendor_name && (
+                                          <span>{vendor.product_name}</span>
+                                        )}
+                                        {vendor.model && vendor.model !== vendor.product_name && (
+                                          <span className="ml-1">{vendor.model}</span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                  
+                                  {/* Price Badge */}
+                                  {vendor.price && (
+                                    <div className="flex items-center gap-1 px-3 py-1 bg-blue-50 rounded-md border border-blue-200">
+                                      <DollarSign className="h-4 w-4 text-blue-600" />
+                                      <span className="font-semibold text-blue-900 text-sm">
+                                        {formatPrice(vendor.price)}
+                                      </span>
+                                    </div>
+                                  )}
                                 </div>
-                                {vendor.price && (
-                                  <div className="text-sm text-muted-foreground">
-                                    Price: {vendor.price}
-                                  </div>
-                                )}
-                                {vendor.delivery && (
-                                  <div className="text-xs text-muted-foreground">
-                                    {vendor.delivery}
-                      </div>
-                    )}
-                                {vendor.purchase_url && (
-                                  <a
-                                    href={vendor.purchase_url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-blue-600 underline text-xs break-all"
-                                  >
-                                    {vendor.purchase_url}
-                            </a>
-                          )}
-                                {vendor.notes && (
-                                  <div className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                                    {vendor.notes}
-                                  </div>
-                          )}
-                        </div>
-                      </div>
+                                
+                                {/* Link and Delivery Info */}
+                                <div className="flex items-center gap-4 flex-wrap">
+                                  {vendor.purchase_url && (
+                                    <a
+                                      href={vendor.purchase_url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 hover:underline"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      <ExternalLink className="h-3 w-3" />
+                                      <span className="max-w-[200px] truncate">
+                                        {getDomain(vendor.purchase_url)}
+                                      </span>
+                                    </a>
+                                  )}
+                                  
+                                  {vendor.delivery && (
+                                    <span className="text-xs text-gray-500">
+                                      {vendor.delivery}
+                                    </span>
+                                  )}
+                                  
+                                  {vendor.inStock !== undefined && (
+                                    <span className={`text-xs px-2 py-0.5 rounded ${
+                                      vendor.inStock 
+                                        ? 'bg-green-100 text-green-700' 
+                                        : 'bg-yellow-100 text-yellow-700'
+                                    }`}>
+                                      {vendor.inStock ? 'In Stock' : 'Check Availability'}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                     );
                         })
                       )}
@@ -556,29 +979,139 @@ export function StepVendorSearch({
             <Card className="border shadow-sm">
             <CardHeader>
               <CardTitle className="text-base">Refine Search</CardTitle>
-              <CardDescription>Add your thoughts and search again</CardDescription>
+              <CardDescription>
+                {batches.length > 0 
+                  ? `Add your thoughts or select a follow-up question to search again. Results will appear as Batch #${batches.length + 1} below.`
+                  : "Add your thoughts and search again"}
+              </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              {/* Refine Input */}
               <div className="flex gap-2">
                 <Input
-                  placeholder="Add your thoughts for the next search"
+                  placeholder="Add your thoughts or specific requirements for the next search..."
                   value={refineInput}
                   onChange={(e) => setRefineInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && refineInput.trim()) {
+                    if (e.key === 'Enter' && refineInput.trim() && !searching && !generatingQuestions) {
                       handleRefineSearch();
                     }
                   }}
+                  disabled={searching}
                 />
-                  <Button 
+                <Button 
                   onClick={handleRefineSearch}
-                  disabled={!refineInput.trim() || searching}
+                  disabled={!refineInput.trim() || searching || generatingQuestions}
                   className="gap-2"
                 >
-                  <Search className="h-4 w-4" />
-                  Search Again
-                  </Button>
+                  {searching ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Searching...
+                    </>
+                  ) : generatingQuestions ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Search className="h-4 w-4" />
+                      Search Again (Batch #{batches.length + 1})
+                    </>
+                  )}
+                </Button>
               </div>
+
+              {/* Follow-up Question Suggestions - Show below input based on user's thoughts */}
+              {generatingQuestions && refineInput.trim().length >= 10 && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground p-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Analyzing your thoughts and generating follow-up questions...
+                </div>
+              )}
+              
+              {showFollowUpSuggestions && followUpQuestions.length > 0 && !generatingQuestions && refineInput.trim().length >= 10 && (
+                <div className="space-y-2 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <p className="text-sm font-medium text-blue-900">
+                    💡 Based on your input and selected specifications, select a question to refine your search:
+                  </p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {followUpQuestions.map((question, idx) => (
+                      <Button
+                        key={idx}
+                        variant={selectedQuestion === question ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => handleQuestionSelection(question)}
+                        disabled={searching || generatingQuestions || validatingSelection}
+                        className={`text-xs ${
+                          selectedQuestion === question 
+                            ? "bg-blue-600 hover:bg-blue-700 text-white" 
+                            : "bg-white hover:bg-blue-100 border-blue-300"
+                        }`}
+                      >
+                        {selectedQuestion === question && validatingSelection ? (
+                          <>
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            Validating...
+                          </>
+                        ) : (
+                          question
+                        )}
+                      </Button>
+                    ))}
+                  </div>
+                  
+                  {/* Validation result */}
+                  {validationResult && (
+                    <div className={`mt-3 p-2 rounded text-xs ${
+                      validationResult.approved 
+                        ? "bg-green-100 text-green-800 border border-green-300" 
+                        : "bg-yellow-100 text-yellow-800 border border-yellow-300"
+                    }`}>
+                      {validationResult.approved ? (
+                        <span>✅ {validationResult.message || "Approved! Starting search..."}</span>
+                      ) : (
+                        <div>
+                          <span>⚠️ {validationResult.message || "Need more clarification"}</span>
+                          {validationResult.moreQuestions && validationResult.moreQuestions.length > 0 && (
+                            <div className="mt-2">
+                              <p className="font-medium">Please select one:</p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {validationResult.moreQuestions.map((q, i) => (
+                                  <Button
+                                    key={i}
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleQuestionSelection(q)}
+                                    disabled={validatingSelection}
+                                    className="text-xs h-6 px-2"
+                                  >
+                                    {q}
+                                  </Button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {!validatingSelection && !validationResult && (
+                    <p className="text-xs text-blue-700 mt-2">
+                      Select a question above to refine your search. The system will validate your selection before searching.
+                    </p>
+                  )}
+                </div>
+              )}
+              
+              {/* Info about batch ordering */}
+              {batches.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  💡 New search results will appear below Batch #{batches.length}. You can continue refining until you find the vendors you need.
+                </p>
+              )}
               </CardContent>
             </Card>
 
@@ -610,7 +1143,23 @@ export function StepVendorSearch({
           onClick={() => {
             // Get selected vendor items
             const allVendors = batches.flatMap(b => b.items);
-            const selectedVendors = allVendors.filter(v => selected.has(v.id));
+            const selectedVendorItems = allVendors.filter(v => selected.has(v.id));
+            
+            // Map VendorItem to Vendor interface format, preserving purchase_url as website
+            const selectedVendors = selectedVendorItems.map(v => ({
+              id: v.id,
+              name: v.vendor_name,
+              productName: v.product_name || v.model || productName,
+              price: typeof v.price === 'string' ? parseFloat(v.price.replace(/[^0-9.]/g, '')) || 0 : (typeof v.price === 'number' ? v.price : 0),
+              contact: '',
+              website: v.purchase_url || '', // Preserve purchase_url as website
+              description: v.notes,
+              deliveryTime: v.delivery,
+              // Keep original fields for reference
+              purchase_url: v.purchase_url,
+              vendor_name: v.vendor_name,
+              model: v.model
+            }));
             
             console.log('StepVendorSearch: Next button clicked');
             console.log('StepVendorSearch: Batches count:', batches.length);
